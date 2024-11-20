@@ -1,107 +1,28 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
-	"net/url"
 	"os"
 
 	"my-bittorrent/decoder"
+	"my-bittorrent/tracker"
+
+	"github.com/jackpal/bencode-go"
+	// "github.com/zeebo/bencode"
 )
 
-func readTorrentFile(relFilepath string) (string, error) {
+func readTorrentFile(relFilepath string) ([]byte, error) {
 	// open the file
-	file, err := os.Open(relFilepath)
+	data, err := os.ReadFile(relFilepath)
 	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	content, err := reader.ReadBytes(0) // Read until EOF
-	if err != nil {
-		if err.Error() != "EOF" { // EOF is expected at the end
-			return "", err
-		}
+		return nil, err
 	}
 
 	// Print the file content as a UTF-8 string
-	// fmt.Println(string(content))
-	return string(content), nil
-}
-
-func getAnnounceUrl(decoded interface{}) (string, error) {
-	// type assert to map[string]interface{}
-	decodedMap, ok := decoded.(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("decoded data is not a map")
-	}
-
-	// check if announce field exists
-	announce, ok := decodedMap["announce"]
-	if !ok {
-		return "", fmt.Errorf("announce field does not exist")
-	}
-
-	// type assert to string
-	announceUrl, ok := announce.(string)
-	if !ok {
-		return "", fmt.Errorf("announce field does not exist")
-	}
-
-	return announceUrl, nil
-}
-
-func sendMessage(announceUrl string) {
-	parsedUrl, err := url.Parse(announceUrl)
-	if err != nil {
-		log.Printf("Error in parsing url %v\n", err)
-	}
-
-	host := parsedUrl.Host
-	if host == "" {
-		log.Printf("Invalid URL, host missing\n")
-		return
-	}
-
-	log.Printf("Tracker Host: %s\n", host)
-
-	trackerServerAddr, err := net.ResolveUDPAddr("udp4", host)
-	if err != nil {
-		log.Printf("Error resolving server address: %v\n", err)
-		return
-	}
-
-	log.Printf("Resolved address: %v\n", trackerServerAddr)
-
-	// connect to tracker client
-	conn, err := net.DialUDP("udp4", nil, trackerServerAddr)
-	if err != nil {
-		log.Printf("Error connecting to server address: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	// send message
-	message := "Hello, Tracker!"
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		log.Printf("Error sending message: %v\n", err)
-		return
-	}
-	log.Printf("Message sent: %s\n", message)
-
-	// receive response from tracker
-	buffer := make([]byte, 1024)
-	n, addr, err := conn.ReadFromUDP(buffer)
-	if err != nil {
-		log.Printf("Error reading response: %v\n", err)
-		return
-	}
-	log.Printf("Received response: %s from %s\n", string(buffer[:n]), addr)
+	return data, nil
 }
 
 func main() {
@@ -114,25 +35,27 @@ func main() {
 			return
 		}
 
-		bencodedStr, err := readTorrentFile(relFilepath)
+		bencoded, err := readTorrentFile(relFilepath)
 		if err != nil {
 			log.Printf("Error reading torrent file: %v", err)
 			return
 		}
 
-		decoded, err := decoder.DecodeBencode(bencodedStr)
+		// torrent, err := decoder.DecodeBencode(string(bencoded))
+		torrent, err := DecodeUsingPackage(bencoded)
 		if err != nil {
 			log.Printf("Error decoding bencode: %v", err)
 			return
 		}
 
-		announceUrl, err := getAnnounceUrl(decoded)
+		// get peers
+		peers, err := tracker.GetPeers(torrent)
 		if err != nil {
-			log.Printf("Error getting announce url: %v", err)
+			log.Printf("Error in getting peers: %v", err)
+			return
 		}
 
-		// send message
-		sendMessage(announceUrl)
+		log.Printf("peers:%v\n", peers)
 
 	} else if command == "decode" {
 		bencodedValue := os.Args[2]
@@ -149,4 +72,19 @@ func main() {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+// temporary using package to parse the bencoded torrent
+func DecodeUsingPackage(bencoded []byte) (interface{}, error) {
+	var data interface{}
+	var err error
+
+	buf := bytes.NewReader(bencoded)
+	data, err = bencode.Decode(buf)
+	if err != nil {
+		fmt.Println("error in decoding in main.go", err)
+		return data, err
+	}
+
+	return data, err
 }
