@@ -13,7 +13,7 @@ import (
 func TestDecodeSinglefileTorrentBencode(t *testing.T) {
 	str := "d8:announce41:http://bttracker.debian.org:6969/announce7:comment35:\"Debian CD from cdimage.debian.org\"13:creation datei1391870037e9:httpseedsl85:http://cdimage.debian.org/cdimage/release/7.4.0/iso-cd/debian-7.4.0-amd64-netinst.iso85:http://cdimage.debian.org/cdimage/archive/7.4.0/iso-cd/debian-7.4.0-amd64-netinst.isoe4:infod6:lengthi232783872e4:name30:debian-7.4.0-amd64-netinst.iso12:piece lengthi262144e6:pieces0:ee"
 
-	decoded, err := DecodeBencode(str)
+	decoded, err := DecodeBencode([]byte(str))
 
 	if err != nil {
 		t.Error(err)
@@ -71,7 +71,7 @@ func TestDecodeListOfInts(t *testing.T) {
 		values[0], values[1], values[2], values[3], values[4], values[5],
 		values[6], values[7], values[8], values[9], values[10])
 
-	decoded, err := DecodeBencode(str)
+	decoded, err := DecodeBencode([]byte(str))
 
 	if err != nil {
 		t.Error(err)
@@ -122,7 +122,7 @@ func TestDecodeUint64(t *testing.T) {
 
 	str := fmt.Sprintf("d3:keyli%dei%deee", values...)
 
-	decoded, err := DecodeBencode(str)
+	decoded, err := DecodeBencode([]byte(str))
 
 	if err != nil {
 		t.Error(err)

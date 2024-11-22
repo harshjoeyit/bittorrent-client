@@ -19,6 +19,11 @@ import (
 
 const PORT_ANNOUNCE_REQ int16 = 6881
 
+type TrackerResponse int
+
+const CONNECT TrackerResponse = 0
+const ANNOUNCE TrackerResponse = 1
+
 // connectRequest defines format of connect request to tracker
 // UDP tracker protocol definition - https://www.bittorrent.org/beps/bep_0015.html
 type connectRequest struct {
@@ -34,7 +39,7 @@ func buildConnectRequest() *connectRequest {
 		TransactionID: randInt32(),
 	}
 
-	log.Printf("connection request: %v", &req)
+	log.Printf("Connect request: %+v", req)
 
 	return req
 }
@@ -46,7 +51,7 @@ func (req *connectRequest) toBytes() []byte {
 	binary.Write(buf, binary.BigEndian, req.Action)
 	binary.Write(buf, binary.BigEndian, req.TransactionID)
 
-	log.Printf("ToBytes in hex: %x", buf.Bytes())
+	// log.Printf("ToBytes in hex: %x", buf.Bytes())
 
 	return buf.Bytes()
 }
@@ -83,17 +88,15 @@ func parseConnectResponse(data []byte) (*connectResponse, error) {
 		return nil, fmt.Errorf("error in reading 'ConnectionID' in connect response: %v", err)
 	}
 
+	log.Printf("Connect response: %+v\n", resp)
+
 	return resp, nil
 }
 
 func randInt32() int32 {
 	source := rand.NewSource(time.Now().UnixNano())
 	r := rand.New(source)
-
-	txnID := r.Int31()
-	// log.Printf("generated random int32: %d", txnID)
-
-	return txnID
+	return r.Int31()
 }
 
 type announceRequest struct {
@@ -274,19 +277,21 @@ func GetPeers(torrent interface{}) ([]Peer, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	// channel to receive peer list
-	ch := make(chan []interface{})
+	ch := make(chan []Peer)
 
-	receiveMessage(ctx, conn, req, torrent, ch)
+	go func() {
+		receiveMessage(ctx, conn, req, torrent, ch)
+	}()
 
 	peers := <-ch
-	for peer := range peers {
-		fmt.Printf("peer: %v\n", peer)
+	for i, peer := range peers {
+		fmt.Printf("peer i: %d, peer: %+v\n", i, peer)
 	}
 
 	// stop receiving messages
 	cancel()
 
-	return []Peer{}, nil
+	return peers, nil
 }
 
 // getAnnounceUrl extracts and returns annouce url (tracker url)
@@ -493,15 +498,16 @@ func sendMessage(conn *net.UDPConn, message []byte) error {
 		return fmt.Errorf("error sending message: %v", err)
 	}
 
-	log.Printf("Message sent: %x\n", message)
+	// log.Printf("Message sent: %x\n", message)
+	log.Printf("Message sent")
 
 	return nil
 }
 
 // receiveMessage listens on the udp connection for incoming messages
-func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequest, torrent interface{}, ch chan<- []interface{}) {
+func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequest, torrent interface{}, ch chan<- []Peer) {
 	for {
-		log.Printf("waiting for message...")
+		fmt.Println("**** receiveMessage: inside for loop")
 
 		select {
 		case <-ctx.Done():
@@ -509,17 +515,24 @@ func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequ
 			return
 		default:
 			// receive response from tracker
-			buffer := make([]byte, 1024)
+			log.Printf("waiting for message...")
+
+			bufferSize := 1024 // can set to 65535 (Max UDP payload size)
+			buffer := make([]byte, bufferSize)
+
 			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			n, addr, err := conn.ReadFromUDP(buffer)
 			if err != nil {
 				log.Printf("Error reading response: %v\n", err)
 				return // or retry
 			}
+			if n >= bufferSize {
+				log.Printf("Warning: data might have been truncated\n")
+			}
 
 			resp := buffer[:n]
 
-			log.Printf("Received response: %v from %s\n", resp, addr)
+			log.Printf("Received response from %s, response: %v \n", addr, resp)
 
 			responseType, err := getResponseType(resp)
 			if err != nil {
@@ -527,17 +540,15 @@ func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequ
 				return // or retry
 			}
 
-			log.Printf("response type: %s\n", responseType)
+			log.Printf("Response type: %d\n", responseType)
 
 			switch responseType {
-			case "connect":
+			case CONNECT:
 				connResp, err := parseConnectResponse(resp)
 				if err != nil {
 					log.Printf("error parsing connect response: %v\n", err)
 					continue
 				}
-
-				log.Printf("Connect response: %v\n", connResp)
 
 				// validate response
 				if connResp.TransactionID != connReq.TransactionID {
@@ -587,27 +598,16 @@ func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequ
 
 				sendMessage(conn, announceReqBytes)
 
-			case "announce":
+			case ANNOUNCE:
 				announceRes, err := parseAnnounceResponse(resp)
 				if err != nil {
 					log.Printf("error parsing announce response: %v\n", err)
 					return
 				}
 
-				log.Printf("Announce response: %v\n", announceRes)
+				ch <- announceRes.Peers
 
-				// peerList, ok := announceResMap["peers"]
-				// if !ok {
-				// 	log.Printf("error: announce response does not contain key 'peer'")
-				// 	return
-				// }
-
-				// // type assert peers
-				// peers := peerList.([]interface{})
-
-				ch <- nil
-
-				// return // we don't need to wait for any more messages
+				return // we don't need to wait for any more messages
 
 			default:
 				log.Printf("Invalid response type: %s", resp)
@@ -618,25 +618,23 @@ func receiveMessage(ctx context.Context, conn *net.UDPConn, connReq *connectRequ
 }
 
 // getResponseType returns the type of response received
-//
-// both connect and announce response have int32 at offset 0 which denote action
-// 0 refers to connect and 1 refers to announce
-//
 // UDP tracker protocol definition - https://www.bittorrent.org/beps/bep_0015.html
-func getResponseType(data []byte) (string, error) {
+func getResponseType(data []byte) (TrackerResponse, error) {
+	// both connect and announce response have int32 at offset 0 which denote action
+	// 0 refers to connect and 1 refers to announce
 	var action int32
 	buf := bytes.NewReader(data)
 
 	err := binary.Read(buf, binary.BigEndian, &action)
 	if err != nil {
-		return "", err
+		return -1, err
 	}
 
 	if action == 0 {
-		return "connect", nil
+		return CONNECT, nil
 	} else if action == 1 {
-		return "announce", nil
+		return ANNOUNCE, nil
 	} else {
-		return "", nil
+		return -1, nil
 	}
 }

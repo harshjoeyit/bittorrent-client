@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,19 +8,15 @@ import (
 
 	"my-bittorrent/decoder"
 	"my-bittorrent/tracker"
-
-	"github.com/jackpal/bencode-go"
-	// "github.com/zeebo/bencode"
 )
 
-func readTorrentFile(relFilepath string) ([]byte, error) {
-	// open the file
+func readFile(relFilepath string) ([]byte, error) {
+	// read complete file into memory at once
 	data, err := os.ReadFile(relFilepath)
 	if err != nil {
 		return nil, err
 	}
 
-	// Print the file content as a UTF-8 string
 	return data, nil
 }
 
@@ -35,21 +30,20 @@ func main() {
 			return
 		}
 
-		bencoded, err := readTorrentFile(relFilepath)
+		bencoded, err := readFile(relFilepath)
 		if err != nil {
 			log.Printf("Error reading torrent file: %v", err)
 			return
 		}
 
-		// torrent, err := decoder.DecodeBencode(string(bencoded))
-		torrent, err := DecodeUsingPackage(bencoded)
+		decoded, err := decoder.DecodeBencode(bencoded)
 		if err != nil {
 			log.Printf("Error decoding bencode: %v", err)
 			return
 		}
 
 		// get peers
-		peers, err := tracker.GetPeers(torrent)
+		peers, err := tracker.GetPeers(decoded)
 		if err != nil {
 			log.Printf("Error in getting peers: %v", err)
 			return
@@ -58,16 +52,28 @@ func main() {
 		log.Printf("peers:%v\n", peers)
 
 	} else if command == "decode" {
-		bencodedValue := os.Args[2]
+		relFilepath := os.Args[2]
 
-		decoded, err := decoder.DecodeBencode(bencodedValue)
-		if err != nil {
-			fmt.Println(err)
+		if relFilepath == "" {
+			log.Println("error: filepath not supplied")
 			return
 		}
 
-		jsonOutput, _ := json.Marshal(decoded)
-		fmt.Println(string(jsonOutput))
+		bencoded, err := readFile(relFilepath)
+		if err != nil {
+			log.Printf("Error reading torrent file: %v", err)
+			return
+		}
+
+		decoded, err := decoder.DecodeBencode(bencoded)
+		if err != nil {
+			log.Printf("Error decoding bencode: %v", err)
+			return
+		}
+
+		torrentJson, _ := json.Marshal(decoded)
+		fmt.Println(len(string(torrentJson)))
+
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
@@ -75,16 +81,16 @@ func main() {
 }
 
 // temporary using package to parse the bencoded torrent
-func DecodeUsingPackage(bencoded []byte) (interface{}, error) {
-	var data interface{}
-	var err error
+// func DecodeUsingPackage(bencoded []byte) (interface{}, error) {
+// 	var data interface{}
+// 	var err error
 
-	buf := bytes.NewReader(bencoded)
-	data, err = bencode.Decode(buf)
-	if err != nil {
-		fmt.Println("error in decoding in main.go", err)
-		return data, err
-	}
+// 	buf := bytes.NewReader(bencoded)
+// 	data, err = bencode.Decode(buf)
+// 	if err != nil {
+// 		fmt.Println("error in decoding in main.go", err)
+// 		return data, err
+// 	}
 
-	return data, err
-}
+// 	return data, err
+// }

@@ -1,158 +1,191 @@
 package decoder
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"strconv"
-	"unicode"
 )
 
 // Ensures gofmt doesn't remove the "os" encoding/json import (feel free to remove this!)
 var _ = json.Marshal
 
-func decodeBencodeHelper(bencodedString string) (interface{}, int, error) {
+// // helper, to be removed later
+// func PeekBytes(reader *bufio.Reader, msg string) {
+// 	fmt.Println("peeking at:", msg)
+// 	p, err := reader.Peek(20)
+// 	if err != nil {
+// 		fmt.Println(err)
+// 		return
+// 	}
+// 	log.Println("peeking 20 bytes", string(p))
+// }
 
-	// fmt.Printf("bencodedString: %s\n\n", bencodedString)
-
-	if len(bencodedString) == 0 {
-		return "", 0, nil
+func decodeBencodeHelper(reader *bufio.Reader) (interface{}, error) {
+	ch, err := reader.ReadByte()
+	if err != nil {
+		return nil, err
 	}
 
-	if unicode.IsDigit(rune(bencodedString[0])) {
-		// string
-
-		// check for empty string - 0:
-		if bencodedString[0] == '0' {
-			return "", 1, nil
-		}
-
-		var firstColonIndex int
-
-		for i := 0; i < len(bencodedString); i++ {
-			if bencodedString[i] == ':' {
-				firstColonIndex = i
-				break
-			}
-		}
-
-		lengthStr := bencodedString[:firstColonIndex]
-
-		length, err := strconv.Atoi(lengthStr)
-		if err != nil {
-			return "", -1, err
-		}
-
-		// todo: check for length should not exceed int64
-
-		// check for negetive length
-		if length < 0 {
-			return "", 1, fmt.Errorf("string length can not be a negative number")
-		}
-
-		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], firstColonIndex + length, nil
-
-	} else if bencodedString[0] == 'i' {
+	switch ch {
+	case 'i':
 		// integer
-		var endIndex int
+		intBuffer, err := readBytesUntil(reader, 'e')
+		if err != nil {
+			return nil, err
+		}
+		// 'e' has also been read into the buffer, so remove it
+		intBuffer = intBuffer[:len(intBuffer)-1]
 
-		for i := 1; i < len(bencodedString); i++ {
-			if bencodedString[i] == 'e' {
-				endIndex = i
-				break
-			}
+		// parse bytes to int64 as per torrent specs
+		integer, err := strconv.ParseInt(string(intBuffer), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing to int64 %v", err)
 		}
 
-		// string between index 1 and endIndex is our integer
-		intStr := bencodedString[1:endIndex]
-		var err error
+		return integer, nil
 
-		if intVal, err := strconv.ParseInt(intStr, 10, 64); err == nil {
-			// int64
-			return intVal, endIndex, nil
-		} else if intVal, err := strconv.ParseUint(intStr, 10, 64); err == nil {
-			// uint64
-			return intVal, endIndex, nil
-		}
-
-		return "", -1, err
-
-	} else if bencodedString[0] == 'l' {
+	case 'l':
+		// list
 		var list []interface{}
+		for {
+			c, err := reader.ReadByte()
+			if err == nil {
+				if c == 'e' {
+					// return result as end of list is reached
+					return list, nil
+				}
 
-		// empty list
-		if len(bencodedString) >= 2 && bencodedString[1] == 'e' {
-			return "", 1, nil
-		}
-
-		currIdx := 1
-		// iterating over each element in the list
-
-		for currIdx < len(bencodedString) && bencodedString[currIdx] != 'e' {
-			decodedListItem, relativeEndIdx, decodingErr := decodeBencodeHelper(bencodedString[currIdx:])
-
-			if decodingErr != nil {
-				return "", -1, fmt.Errorf("error occured decoding: %c at: %d, %w", bencodedString[currIdx], currIdx, decodingErr)
+				// list not ended
+				reader.UnreadByte()
 			}
 
-			list = append(list, decodedListItem)
+			item, err := decodeBencodeHelper(reader)
+			if err != nil {
+				return nil, err
+			}
 
-			currIdx = currIdx + relativeEndIdx + 1
+			list = append(list, item)
 		}
-
-		return list, currIdx, nil
-	} else if bencodedString[0] == 'd' {
+	case 'd':
 		// dictionary
 		dict := map[string]interface{}{}
 
-		// check for empty dictionary
-		if len(bencodedString) >= 2 && bencodedString[1] == 'e' {
-			return "", 1, nil
-		}
+		// read key, value pairs iteratively
+		for {
+			c, err := reader.ReadByte()
+			if err == nil {
+				if c == 'e' {
+					// return result, as end of the dictionary reached
+					return dict, nil
+				}
 
-		currIdx := 1
-		// iterating over each element in the list
-
-		for currIdx < len(bencodedString) && bencodedString[currIdx] != 'e' {
-			// decode key
-			if !unicode.IsDigit(rune(bencodedString[currIdx])) {
-				// key is not a string
-				return "", -1, fmt.Errorf("error occured decoding: %c at: %d, dict key is not a string", bencodedString[0], 0)
+				// dictionary not ended
+				reader.UnreadByte()
 			}
 
-			decodedKey, relativeEndIdx, decodingErr := decodeBencodeHelper(bencodedString[currIdx:])
-			if decodingErr != nil {
-				return "", -1, fmt.Errorf("error occured decoding: %c at: %d, %w", bencodedString[currIdx], currIdx, decodingErr)
+			// read key
+			keyI, err := decodeBencodeHelper(reader)
+			if err != nil {
+				return nil, err
 			}
 
-			decodedKeyStr, ok := decodedKey.(string)
+			// As per specifiction the keys of the dictionary must be string
+			key, ok := keyI.(string)
 			if !ok {
-				return "", -1, fmt.Errorf("assert failed for: %c at: %d, not a string", bencodedString[currIdx], currIdx)
+				return nil, fmt.Errorf("error: dictionary key is not a string, got: %v", keyI)
 			}
 
-			// decode value
-			currIdx = currIdx + relativeEndIdx + 1
-
-			decodedValue, relativeEndIdx, decodingErr := decodeBencodeHelper(bencodedString[currIdx:])
-			if decodingErr != nil {
-				return "", -1, fmt.Errorf("error occured decoding: %c at: %d, %w", bencodedString[currIdx], currIdx, decodingErr)
+			// read value
+			value, err := decodeBencodeHelper(reader)
+			if err != nil {
+				return nil, fmt.Errorf("error in parsing dictionary, failed to get value of key %s", key)
 			}
 
-			// add key, value pair to dictionary
-			dict[decodedKeyStr] = decodedValue
+			dict[key] = value
+		}
+	default:
+		// string
 
-			currIdx = currIdx + relativeEndIdx + 1
+		// unread the first byte which is part of string length
+		err := reader.UnreadByte()
+		if err != nil {
+			log.Println("error unreading the bytes", err)
 		}
 
-		return dict, currIdx, nil
-	} else {
-		return "", -1, fmt.Errorf("error occured decoding: %c at: %d", bencodedString[0], 0)
+		stringLenBuffer, err := readBytesUntil(reader, ':')
+		if err != nil {
+			return nil, err
+		}
+
+		// ':' is also read into buffer, so remove it
+		stringLenBuffer = stringLenBuffer[:len(stringLenBuffer)-1]
+
+		// parse string length to int64
+		stringLen, err := strconv.ParseInt(string(stringLenBuffer), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		stringBuf := make([]byte, stringLen)
+
+		_, err = readAtLeast(reader, stringBuf, int(stringLen))
+
+		return string(stringBuf), err
 	}
 }
 
-// Example:
-//   - 5:hello -> hello
-//   - 10:hello12345 -> hello12345
-func DecodeBencode(bencodedString string) (interface{}, error) {
-	decodedString, _, err := decodeBencodeHelper(bencodedString)
-	return decodedString, err
+// readBytesUntil reads and copies the byte into a buffer (new byte slice) until
+// byte 'delim' is encountered. The copied bytes are returned as the result
+func readBytesUntil(reader *bufio.Reader, delim byte) ([]byte, error) {
+	remBytes := reader.Buffered()
+	var buffer []byte
+	var err error
+
+	// using Peek to directly access the buffered data without copying it into buffer
+	if buffer, err = reader.Peek(remBytes); err != nil {
+		return nil, err
+	}
+
+	// check if the delimiter can be found in the bytes buffer
+	if i := bytes.IndexByte(buffer, delim); i >= 0 {
+		return reader.ReadSlice(delim)
+	}
+
+	return reader.ReadBytes(delim)
+}
+
+// readAtLeast reads 'min' bytes into the 'buf' buffer
+func readAtLeast(reader *bufio.Reader, buf []byte, min int) (n int, err error) {
+	// validate the pre-allocated buffer
+	if len(buf) < min {
+		return 0, io.ErrShortBuffer
+	}
+
+	// reading data iteratively assuming that data will not be read
+	// form buffer in a sing .Read() call
+	// n denotes the last position of copied bzytes into buf
+	for n < min && err == nil {
+		var nn int
+		// read and append to buffer
+		nn, err = reader.Read(buf[n:])
+		n += nn
+	}
+
+	if n >= min {
+		err = nil
+	} else if n > 0 && err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+
+	return
+}
+
+func DecodeBencode(bencoded []byte) (interface{}, error) {
+	byteReader := bytes.NewReader(bencoded)
+	bufReader := bufio.NewReader(byteReader)
+	return decodeBencodeHelper(bufReader)
 }
