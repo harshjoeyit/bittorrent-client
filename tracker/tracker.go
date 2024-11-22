@@ -3,241 +3,20 @@ package tracker
 import (
 	"bytes"
 	"context"
-	cryptoRand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"log"
-	"math/rand"
 	"my-bittorrent/torrent"
 	"net"
-	"net/url"
 	"time"
 )
 
-const PORT_ANNOUNCE_REQ int16 = 6881
+const AnnounceReqPort int16 = 6881
 
 type TrackerResponse int
 
-const CONNECT TrackerResponse = 0
-const ANNOUNCE TrackerResponse = 1
-
-// connectRequest defines format of connect request to tracker
-// UDP tracker protocol definition - https://www.bittorrent.org/beps/bep_0015.html
-type connectRequest struct {
-	ProtocolID    int64 // hardoded magic number - 0x41727101980
-	Action        int32 // Action is '0' for connectRequest
-	TransactionID int32 // randomly generated
-}
-
-func buildConnectRequest() *connectRequest {
-	req := &connectRequest{
-		ProtocolID:    0x41727101980, // magic constant
-		Action:        0,             // Default (0)
-		TransactionID: randInt32(),
-	}
-
-	log.Printf("Connect request: %+v", req)
-
-	return req
-}
-
-func (req *connectRequest) toBytes() ([]byte, error) {
-	buf := new(bytes.Buffer)
-
-	// Write fields in network byte order (big-endian)
-	err := binary.Write(buf, binary.BigEndian, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize connect request: %v", err)
-	}
-
-	// log.Printf("ToBytes in hex: %x", buf.Bytes())
-
-	return buf.Bytes(), nil
-}
-
-// connectResponse defines format of response to connect request to tracker
-// UDP tracker protocol definition - https://www.bittorrent.org/beps/bep_0015.html
-type connectResponse struct {
-	Action        int32
-	TransactionID int32
-	ConnectionID  int64
-}
-
-// parseConnectResponse parses bytes to type connectResponse
-func parseConnectResponse(data []byte) (*connectResponse, error) {
-	if len(data) < 16 {
-		return nil, fmt.Errorf("data too short: expected 16 bytes, got %d", len(data))
-	}
-
-	resp := &connectResponse{}
-	buf := bytes.NewReader(data)
-
-	err := binary.Read(buf, binary.BigEndian, &resp.Action)
-	if err != nil {
-		return nil, fmt.Errorf("error in reading 'Action' in connect response: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.TransactionID)
-	if err != nil {
-		return nil, fmt.Errorf("error in reading 'TransactionID' in connect response: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.ConnectionID)
-	if err != nil {
-		return nil, fmt.Errorf("error in reading 'ConnectionID' in connect response: %v", err)
-	}
-
-	log.Printf("Connect response: %+v\n", resp)
-
-	return resp, nil
-}
-
-func randInt32() int32 {
-	source := rand.NewSource(time.Now().UnixNano())
-	r := rand.New(source)
-	return r.Int31()
-}
-
-type announceRequest struct {
-	ConnectionID  int64    // Has to be the same obtained in connectResponse
-	Action        int32    // default 1
-	TransactionID int32    // randomly generated
-	InfoHash      [20]byte // calculated based on torrent file
-	PeerID        [20]byte
-	Downloaded    int64 // bytes
-	Left          int64 // bytes
-	Uploaded      int64 // bytes
-	Event         int32 // 0: none; 1: completed; 2: started; 3: stopped
-	IPAddress     int32 // default 0
-	Key           int32
-	NumWant       int32
-	Port          int16
-}
-
-func (req *announceRequest) toBytes() ([]byte, error) {
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize announce request: %v", err)
-	}
-	return buf.Bytes(), nil
-}
-
-func buildAnnounceRequest(connectionID int64, infoHash, peerID [20]byte, downloaded, left, uploaded int64, port int16) *announceRequest {
-	req := &announceRequest{
-		ConnectionID:  connectionID,
-		Action:        1, // Announce
-		TransactionID: randInt32(),
-		InfoHash:      infoHash,
-		PeerID:        peerID,
-		Downloaded:    downloaded,
-		Left:          left,
-		Uploaded:      uploaded,
-		Event:         0, // None (0)
-		IPAddress:     0, // Default (0)
-		Key:           randInt32(),
-		NumWant:       -1, // Default (-1)
-		Port:          port,
-	}
-
-	log.Printf("Announce request: %+v\n", req)
-
-	return req
-}
-
-type IPv4AnnounceResponse struct {
-	Action        int32
-	TransactionID int32
-	Interval      int32 // time interval before which announce request should not be re-triggered
-	Leechers      int32
-	Seeders       int32
-	Peers         []Peer
-}
-
-func parseAnnounceResponse(data []byte) (*IPv4AnnounceResponse, error) {
-	if len(data) < 20 {
-		return nil, fmt.Errorf("invalid response: too short, expected > 20 bytes, got: %d", len(data))
-	}
-
-	resp := &IPv4AnnounceResponse{}
-	buf := bytes.NewReader(data)
-
-	// Parse fixed-size fields
-	err := binary.Read(buf, binary.BigEndian, &resp.Action)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse action: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.TransactionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction ID: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.Interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse interval: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.Leechers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse leechers: %v", err)
-	}
-
-	err = binary.Read(buf, binary.BigEndian, &resp.Seeders)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse seeders: %v", err)
-	}
-
-	// Parse Peers
-	peerData := data[20:]
-	for len(peerData) >= 6 {
-		// Extract ip and port
-		ip := net.IP(peerData[:4])
-		port := binary.BigEndian.Uint16(peerData[4:6])
-
-		// Append to the list of peers
-		resp.Peers = append(resp.Peers, Peer{
-			IPAddress: ip,
-			Port:      port,
-		})
-
-		// Slice peerData to process next peers
-		peerData = peerData[6:]
-	}
-
-	log.Printf("Announce response: %+v\n", resp)
-
-	return resp, nil
-}
-
-var peerID [20]byte
-
-func getPeerID() ([20]byte, error) {
-	// Check if the peerID has already been generated
-	if peerID != [20]byte{} {
-		return peerID, nil
-	}
-
-	// Client identifier (e.g., "AT" for Azureus-style)
-	//
-	// Azureus-style uses the following encoding: '-', two characters for
-	// client id, four ascii digits for version number, '-', followed by
-	// random numbers. For example: '-AT0001-'...
-	clientID := "-AT0001-" // 8 bytes
-
-	copy(peerID[:], clientID)
-
-	// Generate the remaining part randomly
-	randomBytes := make([]byte, 12)
-	_, err := cryptoRand.Read(randomBytes)
-	if err != nil {
-		return peerID, fmt.Errorf("error in generating random bytes %v", err)
-	}
-
-	copy(peerID[len(clientID):], randomBytes)
-
-	return peerID, nil
-}
+const Connect TrackerResponse = 0
+const Announce TrackerResponse = 1
 
 // Peer represents a single node participating in a torrent network
 type Peer struct {
@@ -308,33 +87,6 @@ func GetPeers(t *torrent.Torrent) ([]Peer, error) {
 	}
 }
 
-// getUDPConn returns a connection for the given url
-func getUDPConn(serverUrl string) (*net.UDPConn, error) {
-	// parse url to get host
-	parsedUrl, err := url.Parse(serverUrl)
-	if err != nil {
-		log.Printf("Error in parsing url %v\n", err)
-	}
-
-	host := parsedUrl.Host
-	if host == "" {
-		return nil, fmt.Errorf("invalid URL, host missing")
-	}
-
-	log.Printf("Tracker Host: %s\n", host)
-
-	// resolve host
-	serverAddr, err := net.ResolveUDPAddr("udp4", host)
-	if err != nil {
-		return nil, fmt.Errorf("error resolving server address: %v", err)
-	}
-
-	log.Printf("Resolved address: %v\n", serverAddr)
-
-	// connect to tracker client
-	return net.DialUDP("udp4", nil, serverAddr)
-}
-
 // sendMessage sends message on the given udp connection
 func sendMessage(conn *net.UDPConn, message []byte) error {
 	_, err := conn.Write(message)
@@ -388,7 +140,7 @@ func receiveMessage(
 			log.Printf("Response type: %d\n", responseType)
 
 			switch responseType {
-			case CONNECT:
+			case Connect:
 				connResp, err := parseConnectResponse(resp)
 				if err != nil {
 					return fmt.Errorf("error parsing connect response: %v", err)
@@ -428,7 +180,7 @@ func receiveMessage(
 				}
 
 				// send announce request
-				announceReq := buildAnnounceRequest(connResp.ConnectionID, infoHash, peerID, 0, fileSize, 0, PORT_ANNOUNCE_REQ)
+				announceReq := buildAnnounceRequest(connResp.ConnectionID, infoHash, peerID, 0, fileSize, 0, AnnounceReqPort)
 				announceReqBytes, err := announceReq.toBytes()
 				if err != nil {
 					return fmt.Errorf("error converting announce request to bytes: %v", err)
@@ -436,7 +188,7 @@ func receiveMessage(
 
 				sendMessage(conn, announceReqBytes)
 
-			case ANNOUNCE:
+			case Announce:
 				announceRes, err := parseAnnounceResponse(resp)
 				if err != nil {
 					return fmt.Errorf("error parsing announce response: %v", err)
@@ -467,9 +219,9 @@ func getResponseType(data []byte) (TrackerResponse, error) {
 	}
 
 	if action == 0 {
-		return CONNECT, nil
+		return Connect, nil
 	} else if action == 1 {
-		return ANNOUNCE, nil
+		return Announce, nil
 	} else {
 		return -1, nil
 	}
