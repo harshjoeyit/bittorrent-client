@@ -49,7 +49,7 @@ func main() {
 			return
 		}
 
-		log.Printf("peers:%v\n", peers)
+		log.Printf("successfully receveid peers:%v\n", peers)
 
 	} else if command == "decode" {
 		relFilepath := os.Args[2]
