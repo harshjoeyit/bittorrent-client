@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"my-bittorrent/decoder"
+	"my-bittorrent/torrent"
 	"my-bittorrent/tracker"
 )
 
@@ -42,8 +43,11 @@ func main() {
 			return
 		}
 
+		// create a new torrent instance
+		t := torrent.NewTorrent(decoded)
+
 		// get peers
-		peers, err := tracker.GetPeers(decoded)
+		peers, err := tracker.GetPeers(t)
 		if err != nil {
 			log.Printf("Error in getting peers: %v", err)
 			return
