@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
+	"time"
 
 	"my-bittorrent/decoder"
+	"my-bittorrent/peer"
 	"my-bittorrent/torrent"
 	"my-bittorrent/tracker"
 )
@@ -45,6 +48,7 @@ func main() {
 
 		// create a new torrent instance
 		t := torrent.NewTorrent(decoded)
+		_ = t // used var waring suppressed
 
 		// get peers
 		peers, err := tracker.GetPeers(t)
@@ -52,8 +56,15 @@ func main() {
 			log.Printf("Error in getting peers: %v", err)
 			return
 		}
+		// peers := peer.GetCachedPeers()
+		// _ = peers
 
-		log.Printf("successfully receveid peers:%v\n", peers)
+		log.Printf("successfully received peers\n")
+		for i, p := range peers {
+			fmt.Printf("i: %d, IP: %s, port: %d\n", i, p.IPAddress, p.Port)
+		}
+
+		Connect(peers)
 
 	} else if command == "decode" {
 		relFilepath := os.Args[2]
@@ -84,17 +95,72 @@ func main() {
 	}
 }
 
-// temporary using package to parse the bencoded torrent
-// func DecodeUsingPackage(bencoded []byte) (interface{}, error) {
-// 	var data interface{}
-// 	var err error
+// Connect establishes connection with each peer
+func Connect(peers []*peer.Peer) []*peer.Peer {
+	isConnected := make([]bool, len(peers))
+	retryTimes := 2
+	delay := 5 * time.Second
 
-// 	buf := bytes.NewReader(bencoded)
-// 	data, err = bencode.Decode(buf)
-// 	if err != nil {
-// 		fmt.Println("error in decoding in main.go", err)
-// 		return data, err
-// 	}
+	var wg sync.WaitGroup
 
-// 	return data, err
-// }
+	remaining := len(peers) // peers which are yet to be connected
+	for i := 0; i < retryTimes; i++ {
+		if i > 0 {
+			// delay before retrying
+			fmt.Println("waiting before retry")
+			time.Sleep(delay)
+		}
+
+		wg.Add(remaining)
+		go tryConnecting(peers, &wg, isConnected)
+		wg.Wait()
+
+		connected := countConnected(isConnected)
+		remaining = remaining - connected
+		fmt.Println("connected: ", connected)
+	}
+
+	var connectedPeers []*peer.Peer
+	for i, peer := range peers {
+		if isConnected[i] {
+			connectedPeers = append(connectedPeers, peer)
+		}
+	}
+
+	return connectedPeers
+}
+
+func tryConnecting(peers []*peer.Peer, wg *sync.WaitGroup, isConnected []bool) {
+	for i, p := range peers {
+		if isConnected[i] {
+			continue
+		}
+
+		go func() {
+			defer wg.Done()
+			conn, err := peer.ConnectTCP(p)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			log.Printf("Connected to peer %s", conn.RemoteAddr().String())
+			isConnected[i] = true
+			p.Conn = conn // update connection
+		}()
+	}
+}
+
+func countConnected(isConnected []bool) int {
+	var c int
+	for _, val := range isConnected {
+		if val {
+			c++
+		}
+	}
+	return c
+}
+
+func Download(t *torrent.Torrent, peer *peer.Peer) {
+
+}
