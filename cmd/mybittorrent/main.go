@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -25,74 +25,82 @@ func readFile(relFilepath string) ([]byte, error) {
 }
 
 func main() {
-	command := os.Args[1]
-
-	if command == "open" {
-		relFilepath := os.Args[2]
-		if relFilepath == "" {
-			log.Println("error: filepath not supplied")
-			return
-		}
-
-		bencoded, err := readFile(relFilepath)
-		if err != nil {
-			log.Printf("Error reading torrent file: %v", err)
-			return
-		}
-
-		decoded, err := decoder.DecodeBencode(bencoded)
-		if err != nil {
-			log.Printf("Error decoding bencode: %v", err)
-			return
-		}
-
-		// create a new torrent instance
-		t := torrent.NewTorrent(decoded)
-		_ = t // used var waring suppressed
-
-		// get peers
-		peers, err := tracker.GetPeers(t)
-		if err != nil {
-			log.Printf("Error in getting peers: %v", err)
-			return
-		}
-		// peers := peer.GetCachedPeers()
-		// _ = peers
-
-		log.Printf("successfully received peers\n")
-		for i, p := range peers {
-			fmt.Printf("i: %d, IP: %s, port: %d\n", i, p.IPAddress, p.Port)
-		}
-
-		Connect(peers)
-
-	} else if command == "decode" {
-		relFilepath := os.Args[2]
-
-		if relFilepath == "" {
-			log.Println("error: filepath not supplied")
-			return
-		}
-
-		bencoded, err := readFile(relFilepath)
-		if err != nil {
-			log.Printf("Error reading torrent file: %v", err)
-			return
-		}
-
-		decoded, err := decoder.DecodeBencode(bencoded)
-		if err != nil {
-			log.Printf("Error decoding bencode: %v", err)
-			return
-		}
-
-		torrentJson, _ := json.Marshal(decoded)
-		fmt.Println(len(string(torrentJson)))
-
-	} else {
-		fmt.Println("Unknown command: " + command)
-		os.Exit(1)
+	relFilepath := os.Args[1]
+	if relFilepath == "" {
+		log.Println("error: filepath not supplied")
+		return
 	}
+
+	bencoded, err := readFile(relFilepath)
+	if err != nil {
+		log.Printf("Error reading torrent file: %v", err)
+		return
+	}
+
+	decoded, err := decoder.DecodeBencode(bencoded)
+	if err != nil {
+		log.Printf("Error decoding bencode: %v", err)
+		return
+	}
+
+	// create a new torrent instance
+	t := torrent.NewTorrent(decoded)
+	_ = t // used var waring suppressed
+
+	// get peers
+	peers, err := tracker.GetPeers(t)
+	if err != nil {
+		log.Printf("Error in getting peers: %v", err)
+		return
+	}
+	// peers := peer.GetCachedPeers()
+	// _ = peers
+
+	log.Printf("successfully received peers\n")
+	for i, p := range peers {
+		fmt.Printf("i: %d, IP: %s, port: %d\n", i, p.IPAddress, p.Port)
+	}
+
+	// Peers which our client is successfully connected to
+	connectedPeers := Connect(peers)
+
+	infoHash, err := t.GetInfoHash()
+	if err != nil {
+		log.Printf("error getting infohash: %v", err)
+		return
+	}
+
+	handshakeMsg, err := peer.BuildHandshakeMessage(infoHash)
+	if err != nil {
+		log.Printf("error building handshake msg: %v", err)
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(connectedPeers))
+
+	// Send handshake and start receiving messages
+	for _, p := range connectedPeers {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		go func(p *peer.Peer) {
+			defer wg.Done()
+
+			fmt.Println("START: to receive messages...", p.IPAddress, ":", p.Port)
+			peer.ReceiveMessages(ctx, p, t)
+			fmt.Println("END: receive messages", p.IPAddress, ":", p.Port)
+		}(p)
+
+		fmt.Println("START: sending handshake message", p.IPAddress, ":", p.Port)
+		sendErr := peer.SendMessage(p.Conn, handshakeMsg)
+		if sendErr != nil {
+			fmt.Printf("Error in sending handshake msg to %s:%d: %v\n", p.IPAddress, p.Port, sendErr)
+			cancel()
+		}
+		fmt.Println("END: sending handshake", p.IPAddress, ":", p.Port)
+	}
+
+	wg.Wait()
 }
 
 // Connect establishes connection with each peer

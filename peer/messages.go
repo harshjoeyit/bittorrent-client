@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"unicode/utf8"
 )
 
 // messageID defines message IDs for peer to peer message exchange
@@ -27,7 +26,6 @@ const (
 const ProtocolIdentifier string = "BitTorrent protocol"
 
 type Message struct {
-	Len     uint32 // 4 bytes
 	ID      messageID
 	Payload []byte
 }
@@ -35,25 +33,26 @@ type Message struct {
 func BuildHandshakeMessage(infoHash [20]byte) ([]byte, error) {
 	// handshake: <pstrlen><pstr><reserved><info_hash><peer_id>
 	// bytes: 1 + pstrlen + 8 + 20 + 20 = (49 + pstrlen) bytes
-	pstrlen := utf8.RuneCountInString(ProtocolIdentifier)
+	pstrlen := len(ProtocolIdentifier)
 	msg := make([]byte, 49+pstrlen)
 
 	// Add pstrlen as single byte
 	msg[0] = byte(pstrlen)
 	// Add pstr (protocol identifier)
-	copy(msg[1:20], []byte(ProtocolIdentifier))
+	copy(msg[1:1+pstrlen], []byte(ProtocolIdentifier))
 	// Add reserved (8 bytes, all zeroes)
-	copy(msg[20:28], make([]byte, 8))
-	// Add infohash
-	copy(msg[28:48], infoHash[:])
+	copy(msg[1+pstrlen:1+pstrlen+8], make([]byte, 8))
+	// Add info_hash
+	copy(msg[1+pstrlen+8:1+pstrlen+8+20], infoHash[:])
 	// Add peer ID
 	peerID, err := GetPeerID()
 	if err != nil {
 		return nil, fmt.Errorf("error in getting peer ID: %v", err)
 	}
-	copy(msg[48:], peerID[:])
+	fmt.Println("peer ID: ", peerID)
+	copy(msg[1+pstrlen+8+20:], peerID[:])
 
-	fmt.Printf("handshake msg in hex: %x", msg)
+	fmt.Printf("handshake msg in hex: %x\n", msg)
 
 	return msg, nil
 }
@@ -137,10 +136,14 @@ func BuildBitFieldMessage(pieces []bool) ([]byte, error) {
 	// <len=0001+X><id=5><bitfield>, where X is bytes required for bitfield
 	// bytes: 4 + 1 + X
 
+	// MSB refers to the lowest index i.e. 0
 	// Calculate bytes needed to represent bitfield
-	// For e.g.
-	// If peices = 4, bitfield can be reperesented using 1 bytes
-	// If pieces = 10, bitfield can be reperesented using 1 bytes
+	// Ecxample - If peices = 4, bitfield can be reperesented using 1 bytes
+	// If we have pieces 0, 2, then bitfield will look like
+	// [1 0 1 0 0 0 0 0]
+	// Example - If pieces = 10, bitfield can be reperesented using 2 bytes
+	// If we have pieces 3, 5, 8, 9
+	// [0 0 0 1 0 1 0 0] [1 1 0 0 0 0 0 0]
 	bytesForBitfield := (len(pieces) + 7) / 8 // Round up to nearest byte
 
 	// Create the bitfield
@@ -271,33 +274,19 @@ func intToBytes(num int, byteCount int) []byte {
 }
 
 func ParseMessage(msg []byte) (*Message, error) {
-	if len(msg) < 4 {
-		return nil, fmt.Errorf("invalid message, length should be >= 4, got: %d", len(msg))
+	if len(msg) == 0 {
+		return nil, fmt.Errorf("message with no payload, possibly keep-alive")
 	}
 
-	// First 4 bytes denote message length
-	msgLen := binary.BigEndian.Uint32(msg[:4])
-
-	if uint32(len(msg[4:])) != msgLen {
-		return nil, fmt.Errorf("invalid message, parsed length is %d, while actual message is of %d", msgLen, len(msg[4:]))
-	}
-
-	// 5th byte denotes message ID
-	msgID := messageID(msg[4])
+	// payload[0] denotes message ID
+	msgID := messageID(msg[0])
 	if !isValidMessageID(msgID) {
-		return nil, fmt.Errorf("invalid message, message ID not valid, got %d", msgID)
-	}
-
-	// 6th byte onwards is payload
-	var payload []byte
-	if msgLen > 4 {
-		payload = msg[6:]
+		return nil, fmt.Errorf("invalid message payload, message ID not valid, got %d", msgID)
 	}
 
 	return &Message{
-		Len:     msgLen,
 		ID:      msgID,
-		Payload: payload,
+		Payload: msg[1:],
 	}, nil
 }
 

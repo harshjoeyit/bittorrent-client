@@ -14,10 +14,13 @@ import (
 	"unicode/utf8"
 )
 
+const connTimeout = 5 * time.Second
+const readTimeout = 20 * time.Second
+
 func ConnectTCP(peer *Peer) (net.Conn, error) {
 	// Create the address string in the format "IP:Port"
 	addr := fmt.Sprintf("%s:%d", peer.IPAddress.String(), peer.Port)
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, connTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer %s: %w", addr, err)
 	}
@@ -54,6 +57,8 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 			log.Printf("stopping read loop for connection to %s as ctx cancelled or timeout\n", peer.Conn.RemoteAddr().String())
 			return
 		default:
+			log.Printf("waiting for message from peer...")
+
 			if isHandshake {
 				msg, err := ReadHandshakeMessage(ctx, peer.Conn)
 				if err != nil {
@@ -61,7 +66,7 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 					return
 				}
 
-				fmt.Printf("handshake message received: %v\n", msg)
+				fmt.Printf("handshake message received from %s , message: %v\n", peer.Conn.RemoteAddr().String(), msg)
 
 				// validate message
 				if valErr := IsHandshakeMessageValid(msg, t.InfoHash); valErr != nil {
@@ -86,7 +91,7 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 			}
 
 			// Print message
-			fmt.Printf("message received: %v\n", msg)
+			// fmt.Printf("message received: %v\n", msg)
 
 			// Parse message
 			parsedMsg, err := ParseMessage(msg)
@@ -103,7 +108,7 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 
 func ReadHandshakeMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Set a deadline
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
 	defer conn.SetReadDeadline(time.Time{})
 
 	// Decode message length
@@ -134,7 +139,7 @@ func ReadHandshakeMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 }
 
 func IsHandshakeMessageValid(responseMsg []byte, expectedInfoHash [20]byte) error {
-	handshakeMsgLen := 49 + utf8.RuneCountInString(ProtocolIdentifier)
+	handshakeMsgLen := 49 + len(ProtocolIdentifier)
 
 	if len(responseMsg) < handshakeMsgLen {
 		return fmt.Errorf("invalid handshake: response too short, got: %d bytes only", handshakeMsgLen)
@@ -167,9 +172,10 @@ func IsHandshakeMessageValid(responseMsg []byte, expectedInfoHash [20]byte) erro
 
 // ReadMessage reads length prefix message from connection to peers
 // such as choke, unchoke, request, piece, etc
+// Returned value is message without the length prefix
 func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Set a deadline
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
 	defer conn.SetReadDeadline(time.Time{})
 
 	const headerLen = 4 // 4 bytes for the length prefix
@@ -198,7 +204,11 @@ func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Decode message length
 	msgLen := binary.BigEndian.Uint32(header)
 
-	// Create another channel for reading the message body
+	if msgLen == 0 {
+		return []byte{}, nil
+	}
+
+	// Create another channel for reading the message payload
 	done = make(chan error, 1)
 
 	// Read message
@@ -218,6 +228,8 @@ func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 			return nil, fmt.Errorf("error reading message %w", readError(err))
 		}
 	}
+
+	log.Printf("message read completed from: %s, message: %v\n", conn.RemoteAddr().String(), msg)
 
 	return msg, nil
 }

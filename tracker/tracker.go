@@ -21,6 +21,8 @@ const (
 	Announce TrackerResponse = 1
 )
 
+const readTimeout = 10 * time.Second
+
 func GetPeers(t *torrent.Torrent) ([]*peer.Peer, error) {
 	announceUrl, err := t.GetAnnounceUrl()
 	if err != nil {
@@ -116,7 +118,7 @@ func receiveMessage(
 			bufferSize := 1024 // can set to 65535 (Max UDP payload size)
 			buffer := make([]byte, bufferSize)
 
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(readTimeout))
 			n, addr, err := conn.ReadFromUDP(buffer)
 			if err != nil {
 				return fmt.Errorf("error reading response %v", err)
