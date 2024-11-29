@@ -7,8 +7,8 @@ import (
 	"net/url"
 )
 
-// getUDPConn returns a connection for the given url
-func getUDPConn(serverUrl string) (*net.UDPConn, error) {
+// connectUDP returns a connection for the given url
+func connectUDP(serverUrl string) (*net.UDPConn, error) {
 	// parse url to get host
 	parsedUrl, err := url.Parse(serverUrl)
 	if err != nil {

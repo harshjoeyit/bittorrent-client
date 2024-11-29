@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"my-bittorrent/peer"
 	"net"
 )
 
@@ -61,7 +62,7 @@ type IPv4AnnounceResponse struct {
 	Interval      int32 // time interval before which announce request should not be re-triggered
 	Leechers      int32
 	Seeders       int32
-	Peers         []Peer
+	Peers         []*peer.Peer
 }
 
 func parseAnnounceResponse(data []byte) (*IPv4AnnounceResponse, error) {
@@ -106,7 +107,7 @@ func parseAnnounceResponse(data []byte) (*IPv4AnnounceResponse, error) {
 		port := binary.BigEndian.Uint16(peerData[4:6])
 
 		// Append to the list of peers
-		resp.Peers = append(resp.Peers, Peer{
+		resp.Peers = append(resp.Peers, &peer.Peer{
 			IPAddress: ip,
 			Port:      port,
 		})

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"my-bittorrent/peer"
 	"my-bittorrent/torrent"
 	"net"
 	"time"
@@ -15,16 +16,12 @@ const AnnounceReqPort int16 = 6881
 
 type TrackerResponse int
 
-const Connect TrackerResponse = 0
-const Announce TrackerResponse = 1
+const (
+	Connect  TrackerResponse = 0
+	Announce TrackerResponse = 1
+)
 
-// Peer represents a single node participating in a torrent network
-type Peer struct {
-	IPAddress net.IP
-	Port      uint16
-}
-
-func GetPeers(t *torrent.Torrent) ([]Peer, error) {
+func GetPeers(t *torrent.Torrent) ([]*peer.Peer, error) {
 	announceUrl, err := t.GetAnnounceUrl()
 	if err != nil {
 		log.Printf("Error getting announce url: %v", err)
@@ -37,7 +34,7 @@ func GetPeers(t *torrent.Torrent) ([]Peer, error) {
 	log.Printf("announceUrl: %s\n", announceUrl)
 
 	// UDP conn
-	conn, err := getUDPConn(announceUrl)
+	conn, err := connectUDP(announceUrl)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to server address: %v", err)
 	}
@@ -59,7 +56,7 @@ func GetPeers(t *torrent.Torrent) ([]Peer, error) {
 	defer cancel()
 
 	// Channels for results and errors
-	peersCh := make(chan []Peer)
+	peersCh := make(chan []*peer.Peer)
 	errCh := make(chan error)
 
 	go func() {
@@ -106,7 +103,7 @@ func receiveMessage(
 	conn *net.UDPConn,
 	connReq *connectRequest,
 	t *torrent.Torrent,
-	peersCh chan<- []Peer) error {
+	peersCh chan<- []*peer.Peer) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -169,18 +166,18 @@ func receiveMessage(
 				}
 
 				// get peer ID
-				peerID, err := getPeerID()
+				peerID, err := peer.GetPeerID()
 				if err != nil {
 					return fmt.Errorf("error getting peer ID: %v", err)
 				}
 
-				fileSize, err := t.GetFileSize()
+				fileLength, err := t.GetFileLength()
 				if err != nil {
 					return fmt.Errorf("error getting file size: %v", err)
 				}
 
 				// send announce request
-				announceReq := buildAnnounceRequest(connResp.ConnectionID, infoHash, peerID, 0, fileSize, 0, AnnounceReqPort)
+				announceReq := buildAnnounceRequest(connResp.ConnectionID, infoHash, peerID, 0, fileLength, 0, AnnounceReqPort)
 				announceReqBytes, err := announceReq.toBytes()
 				if err != nil {
 					return fmt.Errorf("error converting announce request to bytes: %v", err)

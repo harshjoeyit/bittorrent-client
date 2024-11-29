@@ -158,7 +158,9 @@ func readBytesUntil(reader *bufio.Reader, delim byte) ([]byte, error) {
 	return reader.ReadBytes(delim)
 }
 
-// readAtLeast reads 'min' bytes into the 'buf' buffer
+// readAtLeast emulates the behaviour of io.ReadAtLeast for bufio.Reader
+// It reads from reader into buf at least min bytes
+// It returns the number of bytes copied and an error if fewer bytes were read.
 func readAtLeast(reader *bufio.Reader, buf []byte, min int) (n int, err error) {
 	// validate the pre-allocated buffer
 	if len(buf) < min {
