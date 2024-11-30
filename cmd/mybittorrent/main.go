@@ -14,18 +14,16 @@ import (
 	"my-bittorrent/tracker"
 )
 
-func readFile(relFilepath string) ([]byte, error) {
-	// read complete file into memory at once
-	data, err := os.ReadFile(relFilepath)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
-}
-
 func main() {
 	relFilepath := os.Args[1]
+
+	// Generate Peer ID
+	_, err := peer.GetPeerID()
+	if err != nil {
+		log.Println("error: failed to generate peer ID")
+		return
+	}
+
 	if relFilepath == "" {
 		log.Println("error: filepath not supplied")
 		return
@@ -44,8 +42,11 @@ func main() {
 	}
 
 	// create a new torrent instance
-	t := torrent.NewTorrent(decoded)
-	_ = t // used var waring suppressed
+	t, err := torrent.NewTorrent(decoded)
+	if err != nil {
+		log.Printf("Error creating New Torrent: %v", err)
+		return
+	}
 
 	// get peers
 	peers, err := tracker.GetPeers(t)
@@ -64,13 +65,7 @@ func main() {
 	// Peers which our client is successfully connected to
 	connectedPeers := Connect(peers)
 
-	infoHash, err := t.GetInfoHash()
-	if err != nil {
-		log.Printf("error getting infohash: %v", err)
-		return
-	}
-
-	handshakeMsg, err := peer.BuildHandshakeMessage(infoHash)
+	handshakeMsg, err := peer.BuildHandshakeMessage(t.InfoHash)
 	if err != nil {
 		log.Printf("error building handshake msg: %v", err)
 		return
@@ -101,6 +96,16 @@ func main() {
 	}
 
 	wg.Wait()
+}
+
+func readFile(relFilepath string) ([]byte, error) {
+	// read complete file into memory at once
+	data, err := os.ReadFile(relFilepath)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
 
 // Connect establishes connection with each peer

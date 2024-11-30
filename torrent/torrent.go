@@ -17,12 +17,44 @@ type Torrent struct {
 	FileLength  int64 // to avoid re-computation
 	PiecesCount int   // number of pieces (to avoid re-computation)
 	PieceLength int   // to avoid re-computation
+	Downloader  *Downloader
 }
 
-func NewTorrent(decoded interface{}) *Torrent {
-	return &Torrent{
+func NewTorrent(decoded interface{}) (t *Torrent, err error) {
+	t = &Torrent{
 		T: decoded,
 	}
+
+	// Check validity of torrent by per-calculating fields
+	// at the time of creation of NewTorrent. These fields will
+	// be needed in further steps
+
+	t.InfoHash, err = getInfoHash(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("error getting info hash: %v", err)
+	}
+
+	t.FileLength, err = getFileLength(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("error getting file length: %v", err)
+	}
+
+	t.PiecesCount, err = getPiecesCount(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("error getting pieces count: %v", err)
+	}
+
+	t.PieceLength, err = getPieceLength(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("error getting pieces length: %v", err)
+	}
+
+	t.Downloader, err = NewDowloader(t)
+	if err != nil {
+		return nil, fmt.Errorf("error creating new downloader: %v", err)
+	}
+
+	return t, nil
 }
 
 // GetAnnounceUrl extracts and returns annouce url (tracker url)
@@ -49,11 +81,11 @@ func (t *Torrent) GetAnnounceUrl() (string, error) {
 	return announceUrl, nil
 }
 
-func (t *Torrent) GetInfoHash() ([20]byte, error) {
+func getInfoHash(decoded interface{}) ([20]byte, error) {
 	infoHash := [20]byte{0}
 
 	// type assert to map[string]interface{}
-	torrentMap, ok := t.T.(map[string]interface{})
+	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
 		return infoHash, fmt.Errorf("decoded data is not a map")
 	}
@@ -84,25 +116,15 @@ func (t *Torrent) GetInfoHash() ([20]byte, error) {
 	// prints 40 character hexadecimal string
 	log.Printf("info_hash: %s\n", hex.EncodeToString(infoHash[:]))
 
-	// converting to string - not required
-	// infoHashStr = hex.EncodeToString(infoHash[:])
-
-	// save for future use
-	t.InfoHash = infoHash
-
 	return infoHash, nil
 }
 
 // GetFileLength returns file length (in bytes)
-func (t *Torrent) GetFileLength() (int64, error) {
-	if t.FileLength > 0 {
-		return t.FileLength, nil
-	}
-
+func getFileLength(decoded interface{}) (int64, error) {
 	var fileLength int64
 
 	// type assert to map[string]interface{}
-	torrentMap, ok := t.T.(map[string]interface{})
+	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
 		return fileLength, fmt.Errorf("decoded data is not a map")
 	}
@@ -205,22 +227,15 @@ func (t *Torrent) GetFileLength() (int64, error) {
 
 	log.Printf("total length of multi-file: %d bytes\n", fileLength)
 
-	// update field in torrent instance for future use
-	t.FileLength = fileLength
-
 	return fileLength, nil
 }
 
 // GetPiecesCount returns number of pieces for the torrent
-func (t *Torrent) GetPiecesCount() (int, error) {
-	if t.PiecesCount > 0 {
-		return t.PiecesCount, nil
-	}
-
+func getPiecesCount(decoded interface{}) (int, error) {
 	var c int
 
 	// type assert to map[string]interface{}
-	torrentMap, ok := t.T.(map[string]interface{})
+	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
 		return c, fmt.Errorf("decoded data is not a map")
 	}
@@ -254,21 +269,14 @@ func (t *Torrent) GetPiecesCount() (int, error) {
 		return c, fmt.Errorf("length of pieces is not divisible by 20")
 	}
 
-	c = len(piecesStr) / 20
-	t.PiecesCount = c
-
-	return c, nil
+	return len(piecesStr) / 20, nil
 }
 
-func (t *Torrent) GetPieceLength() (int, error) {
-	if t.PieceLength > 0 {
-		return t.PieceLength, nil
-	}
-
+func getPieceLength(decoded interface{}) (int, error) {
 	var l int
 
 	// type assert to map[string]interface{}
-	torrentMap, ok := t.T.(map[string]interface{})
+	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
 		return l, fmt.Errorf("decoded data is not a map")
 	}
@@ -295,10 +303,7 @@ func (t *Torrent) GetPieceLength() (int, error) {
 		return l, fmt.Errorf("'piece length' field is not a int")
 	}
 
-	l = int(lenInt)
-	t.PieceLength = l
-
-	return l, nil
+	return int(lenInt), nil
 }
 
 // GetPieceLengthAtPosition returns the length of a piece at a given
@@ -310,28 +315,18 @@ func (t *Torrent) GetPieceLengthAtPosition(pieceIdx int) (int, error) {
 		return 0, fmt.Errorf("piece index cannot be < 0")
 	}
 
-	fileLength, err := t.GetFileLength()
-	if err != nil {
-		return 0, fmt.Errorf("error getting file length: %w", err)
-	}
-
-	pieceLength, err := t.GetPieceLength()
-	if err != nil {
-		return 0, fmt.Errorf("error getting pieces count: %w", err)
-	}
-
-	lastPieceIdx := int(fileLength / int64(pieceLength))
+	lastPieceIdx := int(t.FileLength / int64(t.PieceLength))
 	if pieceIdx > lastPieceIdx {
 		return 0, fmt.Errorf("invalid piece index, exceeds number of pieces")
 	}
 
-	lastPieceLength := int(fileLength % int64(pieceLength))
+	lastPieceLength := int(t.FileLength % int64(t.PieceLength))
 
 	if pieceIdx == lastPieceIdx {
 		return lastPieceLength, nil
 	}
 
-	return pieceLength, nil
+	return t.PieceLength, nil
 }
 
 const defaultBlockLength int = 16384 // 16KB

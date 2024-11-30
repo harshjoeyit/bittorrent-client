@@ -3,6 +3,7 @@ package peer
 import (
 	cryptoRand "crypto/rand"
 	"fmt"
+	"my-bittorrent/peer/queue"
 	"net"
 )
 
@@ -12,7 +13,15 @@ type Peer struct {
 	IPAddress net.IP
 	Port      uint16
 	Conn      net.Conn // TCP connection
-	HasPieces []bool   // Pieces that a peer has
+	TaskQueue queue.Queue
+}
+
+func NewPeer(ip net.IP, port uint16) *Peer {
+	return &Peer{
+		IPAddress: ip,
+		Port:      port,
+		TaskQueue: queue.NewQueue(),
+	}
 }
 
 var PeerID [20]byte
@@ -47,15 +56,6 @@ func GetPeerID() ([20]byte, error) {
 
 func GetCachedPeers() []*Peer {
 	return []*Peer{
-		{ID: [20]byte{}, IPAddress: net.ParseIP("49.37.249.9"), Port: 6881, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("78.92.207.147"), Port: 42069, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("146.70.107.220"), Port: 42069, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("157.157.43.209"), Port: 42069, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("220.246.210.35"), Port: 6881, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("212.102.35.101"), Port: 39852, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("212.92.104.216"), Port: 45671, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("212.32.253.225"), Port: 21188, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("197.232.29.6"), Port: 47704, Conn: nil, HasPieces: []bool{}},
-		{ID: [20]byte{}, IPAddress: net.ParseIP("194.36.110.131"), Port: 63943, Conn: nil, HasPieces: []bool{}},
+		{ID: [20]byte{}, IPAddress: net.ParseIP("49.37.249.9"), Port: 6881, Conn: nil},
 	}
 }

@@ -45,12 +45,8 @@ func BuildHandshakeMessage(infoHash [20]byte) ([]byte, error) {
 	// Add info_hash
 	copy(msg[1+pstrlen+8:1+pstrlen+8+20], infoHash[:])
 	// Add peer ID
-	peerID, err := GetPeerID()
-	if err != nil {
-		return nil, fmt.Errorf("error in getting peer ID: %v", err)
-	}
-	fmt.Println("peer ID: ", peerID)
-	copy(msg[1+pstrlen+8+20:], peerID[:])
+	fmt.Println("peer ID: ", PeerID)
+	copy(msg[1+pstrlen+8+20:], PeerID[:])
 
 	fmt.Printf("handshake msg in hex: %x\n", msg)
 

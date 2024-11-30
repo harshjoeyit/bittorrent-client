@@ -161,25 +161,17 @@ func receiveMessage(
 
 				// build announce request
 
-				// get info hash of torrent
-				infoHash, err := t.GetInfoHash()
-				if err != nil {
-					return fmt.Errorf("error getting info hash: %v", err)
-				}
-
-				// get peer ID
-				peerID, err := peer.GetPeerID()
-				if err != nil {
-					return fmt.Errorf("error getting peer ID: %v", err)
-				}
-
-				fileLength, err := t.GetFileLength()
-				if err != nil {
-					return fmt.Errorf("error getting file size: %v", err)
-				}
-
 				// send announce request
-				announceReq := buildAnnounceRequest(connResp.ConnectionID, infoHash, peerID, 0, fileLength, 0, AnnounceReqPort)
+				announceReq := buildAnnounceRequest(
+					connResp.ConnectionID,
+					t.InfoHash,
+					peer.PeerID,
+					0,
+					t.FileLength,
+					0,
+					AnnounceReqPort,
+				)
+
 				announceReqBytes, err := announceReq.toBytes()
 				if err != nil {
 					return fmt.Errorf("error converting announce request to bytes: %v", err)

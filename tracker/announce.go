@@ -107,10 +107,7 @@ func parseAnnounceResponse(data []byte) (*IPv4AnnounceResponse, error) {
 		port := binary.BigEndian.Uint16(peerData[4:6])
 
 		// Append to the list of peers
-		resp.Peers = append(resp.Peers, &peer.Peer{
-			IPAddress: ip,
-			Port:      port,
-		})
+		resp.Peers = append(resp.Peers, peer.NewPeer(ip, port))
 
 		// Slice peerData to process next peers
 		peerData = peerData[6:]
