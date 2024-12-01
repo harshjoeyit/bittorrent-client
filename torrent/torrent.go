@@ -43,11 +43,15 @@ func NewTorrent(decoded interface{}) (t *Torrent, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting pieces count: %v", err)
 	}
+	log.Println("total pieces:", t.PiecesCount)
 
 	t.PieceLength, err = getPieceLength(decoded)
 	if err != nil {
 		return nil, fmt.Errorf("error getting pieces length: %v", err)
 	}
+	log.Println("piece length:", t.PieceLength)
+	blocksPerPiece, _ := t.GetBlocksCount(0)
+	log.Println("blocks per piece >=", blocksPerPiece)
 
 	t.Downloader, err = NewDownloader(t)
 	if err != nil {
@@ -317,7 +321,7 @@ func (t *Torrent) GetPieceLengthAtPosition(pieceIdx int) (int, error) {
 
 	lastPieceIdx := int(t.FileLength / int64(t.PieceLength))
 	if pieceIdx > lastPieceIdx {
-		return 0, fmt.Errorf("invalid piece index, exceeds number of pieces")
+		return 0, fmt.Errorf("invalid piece index %d, exceeds valid range [0, %d]", pieceIdx, lastPieceIdx)
 	}
 
 	lastPieceLength := int(t.FileLength % int64(t.PieceLength))
@@ -352,7 +356,7 @@ func (t *Torrent) GetBlockLength(pieceIdx, blockIdx int) (int, error) {
 
 	lastBlockIdx := blocks - 1
 	if blockIdx > lastBlockIdx {
-		return 0, fmt.Errorf("invalid block index, exceeds number of blocks")
+		return 0, fmt.Errorf("invalid block index %d, exceeds valid range [0, %d]", blockIdx, lastBlockIdx)
 	}
 
 	// piece length
@@ -362,6 +366,13 @@ func (t *Torrent) GetBlockLength(pieceIdx, blockIdx int) (int, error) {
 	}
 
 	lastBlockLength := pieceLength % DefaultBlockLength
+
+	// If pieceLength is multiple of DefaultBlockLength, then lastBlockLength is 0
+	// In this case last blocks is no special from other blocks
+	// handling this properly and setting it to DefaultBlockLength
+	if lastBlockLength == 0 && pieceLength > 0 {
+		lastBlockLength = DefaultBlockLength
+	}
 
 	if blockIdx == lastBlockIdx {
 		return lastBlockLength, nil

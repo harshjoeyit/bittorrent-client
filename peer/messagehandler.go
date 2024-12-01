@@ -6,20 +6,18 @@ import (
 	"log"
 	"my-bittorrent/queue"
 	"my-bittorrent/torrent"
-	"net"
 )
 
-func chokeMsgHandler(conn net.Conn, p *Peer) error {
-	log.Println("CHOKE message received")
+func chokeMsgHandler(p *Peer) error {
+	fmt.Printf("CHOKE message received from: %s\n", p.Conn.RemoteAddr().String())
 	// close the connection
-	// return conn.Close()
-	_ = conn
+	// return p.Conn.Close()
 	p.AmChoked = true
 	return nil
 }
 
-func unchokeMsgHandler(p *Peer, d *torrent.Downloader) error {
-	log.Println("UNCHOKE message received")
+func unchokeMsgHandler(p *Peer, t *torrent.Torrent) error {
+	log.Printf("UNCHOKE message received from: %s\n", p.Conn.RemoteAddr().String())
 
 	p.AmChoked = false
 
@@ -27,7 +25,7 @@ func unchokeMsgHandler(p *Peer, d *torrent.Downloader) error {
 	// It is possible that TaskQueue is filled with blocks but the client
 	// was choked before it could request for all the blocks,
 	// hence when client gets unchoked again, request for blocks
-	err := requestOnePiece(p, d)
+	err := requestOnePiece(p, t.Downloader)
 	if err != nil {
 		return fmt.Errorf("error requesting one piece: %w", err)
 	}
@@ -35,7 +33,6 @@ func unchokeMsgHandler(p *Peer, d *torrent.Downloader) error {
 	return nil
 }
 
-// requestPieces is invoked to request pieces when peer is unchoked
 func requestOnePiece(p *Peer, d *torrent.Downloader) error {
 	if p.AmChoked {
 		return fmt.Errorf("cannot request for piece as peer choking: %s", p.Conn.RemoteAddr().String())
@@ -57,6 +54,8 @@ func requestOnePiece(p *Peer, d *torrent.Downloader) error {
 
 		d.Requested(b)
 
+		log.Printf("requested piece [%d][%d] from: %s\n", b.PieceIdx, d.BlockIdx(b), p.Conn.RemoteAddr().String())
+
 		// break since we are requesting for only one piece
 		// Following strategy to request pieces from peer with highest upload rate,
 		// rest of the pieces will be requested when response for this piece is received
@@ -67,7 +66,8 @@ func requestOnePiece(p *Peer, d *torrent.Downloader) error {
 }
 
 func haveMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
-	fmt.Println("HAVE message received")
+	fmt.Printf("HAVE message received from %s\n", p.Conn.RemoteAddr().String())
+
 	if len(payload) != 4 {
 		return fmt.Errorf("payload for have message should be 4 bytes, got %d", payload)
 	}
@@ -94,7 +94,7 @@ func haveMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
 }
 
 func bitfieldMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
-	log.Println("BITFIELD message received", len(payload))
+	log.Printf("BITFIELD message received, with len: %d, from peer: %s", len(payload), p.Conn.RemoteAddr().String())
 
 	var pieceIndices []int
 
@@ -112,7 +112,7 @@ func bitfieldMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
 		}
 	}
 
-	fmt.Println("BITFIELD decoded indices: ", pieceIndices)
+	// fmt.Println("BITFIELD decoded indices: ", pieceIndices)
 
 	e := p.TaskQueue.IsEmpty()
 
@@ -160,12 +160,53 @@ func enqueueBlocksForPiece(pieceIdx int, p *Peer, t *torrent.Torrent) error {
 			))
 	}
 
-	fmt.Printf("Enqueued all pieces for pieceIdx: %d\n", pieceIdx)
+	// fmt.Printf("Enqueued all pieces for pieceIdx: %d, for peer: %s\n", pieceIdx, p.Conn.RemoteAddr().String())
 
 	return nil
 }
 
-func pieceMsgHandler(payload []byte) error {
-	log.Println("PIECE message received", len(payload))
-	return nil
+func pieceMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
+	// log.Printf("PIECE message received, with len: %d, from peer: %s\n", len(payload), p.Conn.RemoteAddr().String())
+
+	b, blockData := parsePieceMsg(payload)
+
+	// Validate block
+
+	// Validate indices (if such a block exists)
+	if !t.Downloader.IsValidBlock(b) {
+		return fmt.Errorf(
+			"invalid block received, [%d][%d]",
+			b.PieceIdx, t.Downloader.BlockIdx(b))
+	}
+
+	blockLen, err := t.GetBlockLength(b.PieceIdx, t.Downloader.BlockIdx(b))
+	if err != nil {
+		return fmt.Errorf("error getting block length: %w", err)
+	}
+
+	// Validate length of the block data received
+	if blockLen != len(blockData) {
+		return fmt.Errorf("block len mismatch, expected:%d, got:%d", blockLen, len(blockData))
+	}
+
+	// Mark as downloaded
+	t.Downloader.Downloaded(b)
+
+	fmt.Printf("PIECE received: [%d][%d], from peer:%s\n", b.PieceIdx, t.Downloader.BlockIdx(b), p.Conn.RemoteAddr().String())
+
+	if !t.Downloader.IsDownloadComplete() {
+		// Download incomplete
+		return requestOnePiece(p, t.Downloader)
+	}
+
+	// Download complete
+	return p.Conn.Close()
+}
+
+func parsePieceMsg(payload []byte) (*queue.Block, []byte) {
+	pieceIdx := binary.BigEndian.Uint32(payload[0:4])
+	blockOffset := binary.BigEndian.Uint32(payload[4:8])
+	blockData := payload[8:]
+
+	return queue.NewBlock(int(pieceIdx), int(blockOffset), len(blockData)), blockData
 }

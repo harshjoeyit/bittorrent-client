@@ -187,7 +187,8 @@ func BuildRequestMessage(pieceIdx, blockOffset, reqLen int) []byte {
 	copy(msg[9:13], intToBytes(blockOffset, 4))
 	copy(msg[13:17], intToBytes(reqLen, 4))
 
-	fmt.Printf("request msg in hex: %x", msg)
+	// fmt.Printf("request msg in hex: %x\n", msg)
+	// fmt.Printf("request msg: %v\n", msg)
 
 	return msg
 }

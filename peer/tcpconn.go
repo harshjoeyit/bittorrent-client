@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"my-bittorrent/torrent"
 	"net"
 	"time"
@@ -15,7 +16,8 @@ import (
 )
 
 const connTimeout = 5 * time.Second
-const readTimeout = 20 * time.Second
+const handshakeReadTimeout = 20 * time.Second
+const messageReadTimeout = 1 * time.Minute
 
 func ConnectTCP(peer *Peer) (net.Conn, error) {
 	// Create the address string in the format "IP:Port"
@@ -57,7 +59,7 @@ func ReceiveMessages(ctx context.Context, p *Peer, t *torrent.Torrent) {
 			log.Printf("stopping read loop for connection to %s as ctx cancelled or timeout\n", p.Conn.RemoteAddr().String())
 			return
 		default:
-			log.Printf("waiting for message from peer...")
+			fmt.Printf("waiting for message from peer: %s\n", p.Conn.RemoteAddr().String())
 
 			if isHandshake {
 				msg, err := ReadHandshakeMessage(ctx, p.Conn)
@@ -66,7 +68,9 @@ func ReceiveMessages(ctx context.Context, p *Peer, t *torrent.Torrent) {
 					return
 				}
 
-				fmt.Printf("handshake message received from %s , message: %v\n", p.Conn.RemoteAddr().String(), msg)
+				hloglen := math.Min(float64(len(msg)), 10)
+				hloglen2 := int(hloglen)
+				fmt.Printf("handshake message received from %s , message[:%d]: %v\n", p.Conn.RemoteAddr().String(), hloglen2, msg[:hloglen2])
 
 				// validate message
 				if valErr := IsHandshakeMessageValid(msg, t.InfoHash); valErr != nil {
@@ -108,7 +112,7 @@ func ReceiveMessages(ctx context.Context, p *Peer, t *torrent.Torrent) {
 
 func ReadHandshakeMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Set a deadline
-	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetReadDeadline(time.Now().Add(handshakeReadTimeout))
 	defer conn.SetReadDeadline(time.Time{})
 
 	// Decode message length
@@ -175,8 +179,8 @@ func IsHandshakeMessageValid(responseMsg []byte, expectedInfoHash [20]byte) erro
 // Returned value is message without the length prefix
 func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Set a deadline
-	// conn.SetReadDeadline(time.Now().Add(readTimeout))
-	// defer conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Now().Add(messageReadTimeout))
+	defer conn.SetReadDeadline(time.Time{})
 
 	const headerLen = 4 // 4 bytes for the length prefix
 
@@ -205,6 +209,7 @@ func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	msgLen := binary.BigEndian.Uint32(header)
 
 	if msgLen == 0 {
+		fmt.Println("0 len msg", header)
 		return []byte{}, nil
 	}
 
@@ -229,7 +234,15 @@ func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 		}
 	}
 
-	log.Printf("message read completed from: %s, message: %v\n", conn.RemoteAddr().String(), msg)
+	// logging
+	// loglen := math.Min(float64(len(msg)), 10)
+	// loglen2 := int(loglen)
+	// log.Printf(
+	// 	"message read completed from: %s, message[:%d]: %v\n",
+	// 	conn.RemoteAddr().String(),
+	// 	loglen2,
+	// 	msg[:loglen2],
+	// )
 
 	return msg, nil
 }
@@ -253,12 +266,12 @@ func messageRouter(m *Message, p *Peer, t *torrent.Torrent) {
 
 	switch m.ID {
 	case 0:
-		err = chokeMsgHandler(p.Conn, p)
+		err = chokeMsgHandler(p)
 		if err != nil {
 			log.Printf("error in choke msg handler: %v", err)
 		}
 	case 1:
-		err = unchokeMsgHandler(p, t.Downloader)
+		err = unchokeMsgHandler(p, t)
 		if err != nil {
 			log.Printf("error in unchoke msg handler: %v", err)
 		}
@@ -273,7 +286,7 @@ func messageRouter(m *Message, p *Peer, t *torrent.Torrent) {
 			log.Printf("error in bitfield msg handler: %v", err)
 		}
 	case 7:
-		err = pieceMsgHandler(m.Payload)
+		err = pieceMsgHandler(m.Payload, p, t)
 		if err != nil {
 			log.Printf("error in piece msg handler: %v", err)
 		}

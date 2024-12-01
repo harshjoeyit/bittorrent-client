@@ -81,19 +81,22 @@ func main() {
 		go func(p *peer.Peer) {
 			defer wg.Done()
 
-			fmt.Println("START: to receive messages...", p.IPAddress, ":", p.Port)
+			fmt.Println("START: to receive messages ", p.Conn.RemoteAddr().String())
 			peer.ReceiveMessages(ctx, p, t)
-			fmt.Println("END: receive messages", p.IPAddress, ":", p.Port)
+			fmt.Println("END: receive messages", p.Conn.RemoteAddr().String())
 		}(p)
 
-		fmt.Println("START: sending handshake message", p.IPAddress, ":", p.Port)
+		fmt.Println("START: sending handshake message", p.Conn.RemoteAddr().String())
 		sendErr := peer.SendMessage(p.Conn, handshakeMsg)
 		if sendErr != nil {
-			fmt.Printf("Error in sending handshake msg to %s:%d: %v\n", p.IPAddress, p.Port, sendErr)
+			fmt.Printf("Error in sending handshake msg to: %s, error: %v\n", p.Conn.RemoteAddr().String(), sendErr)
 			cancel()
 		}
-		fmt.Println("END: sending handshake", p.IPAddress, ":", p.Port)
+		fmt.Println("END: sending handshake", p.Conn.RemoteAddr().String())
 	}
+
+	// Print stats
+	PrintStats(t.Downloader)
 
 	wg.Wait()
 }
@@ -176,4 +179,24 @@ func countConnected(isConnected []bool) int {
 
 func Download(t *torrent.Torrent, peer *peer.Peer) {
 
+}
+
+func PrintStats(d *torrent.Downloader) {
+	var wgForStats sync.WaitGroup
+	wgForStats.Add(1)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C { // Use `for range` to iterate over the ticker channel
+			if d.IsDownloadComplete() {
+				wgForStats.Done()
+				break // Exit the loop if the download is complete
+			}
+			d.PrintProgress()
+		}
+	}()
+
+	wgForStats.Wait()
 }
