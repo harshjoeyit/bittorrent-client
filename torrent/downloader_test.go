@@ -11,7 +11,7 @@ func TestNewDowloader(t *testing.T) {
 		"first": {
 			torrent: &Torrent{
 				PiecesCount: 11,
-				FileLength:  int64(10*256*1024 + 14*defaultBlockLength + 10), // 10 pieces and 15 blocks
+				FileLength:  int64(10*256*1024 + 14*DefaultBlockLength + 10), // 10 pieces and 15 blocks
 				PieceLength: 256 * 1024,                                      // 256 KB
 			},
 		},
@@ -19,7 +19,7 @@ func TestNewDowloader(t *testing.T) {
 
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
-			d, err := NewDowloader(test.torrent)
+			d, err := NewDownloader(test.torrent)
 			if err != nil {
 				t.Errorf("error creating new downloader: %v", err)
 			}
@@ -34,16 +34,16 @@ func TestNewDowloader(t *testing.T) {
 
 			// all but last piece
 			for i := 0; i < len(d.downloadedBlocks)-1; i++ {
-				if len(d.downloadedBlocks[i]) != test.torrent.PieceLength/defaultBlockLength {
-					t.Errorf("downloadedBlocks[%d] len mismatch, expected: %d, got: %d", i, defaultBlockLength, len(d.downloadedBlocks[i]))
+				if len(d.downloadedBlocks[i]) != test.torrent.PieceLength/DefaultBlockLength {
+					t.Errorf("downloadedBlocks[%d] len mismatch, expected: %d, got: %d", i, DefaultBlockLength, len(d.downloadedBlocks[i]))
 				}
 			}
 
 			// last piece
 			lastPieceLen := test.torrent.FileLength % int64(test.torrent.PieceLength) % int64(test.torrent.PieceLength)
-			blocksInLastPiece := lastPieceLen / int64(defaultBlockLength)
+			blocksInLastPiece := lastPieceLen / int64(DefaultBlockLength)
 
-			if lastPieceLen%int64(defaultBlockLength) != 0 {
+			if lastPieceLen%int64(DefaultBlockLength) != 0 {
 				blocksInLastPiece += 1
 			}
 

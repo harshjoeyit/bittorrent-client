@@ -3,7 +3,7 @@ package peer
 import (
 	cryptoRand "crypto/rand"
 	"fmt"
-	"my-bittorrent/peer/queue"
+	"my-bittorrent/queue"
 	"net"
 )
 
@@ -12,8 +12,9 @@ type Peer struct {
 	ID        [20]byte // Received in handshake response
 	IPAddress net.IP
 	Port      uint16
-	Conn      net.Conn // TCP connection
-	TaskQueue queue.Queue
+	Conn      net.Conn     // TCP connection
+	TaskQueue *queue.Queue // TaskQueue is used store the pieces a peer has until they are requested
+	AmChoked  bool         // AmChoked is used to indicate if client is choked by peer
 }
 
 func NewPeer(ip net.IP, port uint16) *Peer {
@@ -21,6 +22,7 @@ func NewPeer(ip net.IP, port uint16) *Peer {
 		IPAddress: ip,
 		Port:      port,
 		TaskQueue: queue.NewQueue(),
+		AmChoked:  true,
 	}
 }
 

@@ -46,27 +46,27 @@ func SendMessage(conn net.Conn, message []byte) error {
 	return nil
 }
 
-func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
-	defer peer.Conn.Close()
+func ReceiveMessages(ctx context.Context, p *Peer, t *torrent.Torrent) {
+	defer p.Conn.Close()
 	isHandshake := true // first message is handshake message
 
 	for {
 		select {
 		// When we don't need connection anymore, we can simply stop reading and close connection
 		case <-ctx.Done():
-			log.Printf("stopping read loop for connection to %s as ctx cancelled or timeout\n", peer.Conn.RemoteAddr().String())
+			log.Printf("stopping read loop for connection to %s as ctx cancelled or timeout\n", p.Conn.RemoteAddr().String())
 			return
 		default:
 			log.Printf("waiting for message from peer...")
 
 			if isHandshake {
-				msg, err := ReadHandshakeMessage(ctx, peer.Conn)
+				msg, err := ReadHandshakeMessage(ctx, p.Conn)
 				if err != nil {
 					log.Printf("error reading message: %v\n", err)
 					return
 				}
 
-				fmt.Printf("handshake message received from %s , message: %v\n", peer.Conn.RemoteAddr().String(), msg)
+				fmt.Printf("handshake message received from %s , message: %v\n", p.Conn.RemoteAddr().String(), msg)
 
 				// validate message
 				if valErr := IsHandshakeMessageValid(msg, t.InfoHash); valErr != nil {
@@ -84,7 +84,7 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 			}
 
 			// Read messages from the connection
-			msg, err := ReadMessage(ctx, peer.Conn)
+			msg, err := ReadMessage(ctx, p.Conn)
 			if err != nil {
 				log.Printf("error reading message: %v\n", err)
 				return
@@ -101,7 +101,7 @@ func ReceiveMessages(ctx context.Context, peer *Peer, t *torrent.Torrent) {
 			}
 
 			// route the message to handlers
-			messageRouter(parsedMsg)
+			messageRouter(parsedMsg, p, t)
 		}
 	}
 }
@@ -175,8 +175,8 @@ func IsHandshakeMessageValid(responseMsg []byte, expectedInfoHash [20]byte) erro
 // Returned value is message without the length prefix
 func ReadMessage(ctx context.Context, conn net.Conn) ([]byte, error) {
 	// Set a deadline
-	conn.SetReadDeadline(time.Now().Add(readTimeout))
-	defer conn.SetReadDeadline(time.Time{})
+	// conn.SetReadDeadline(time.Now().Add(readTimeout))
+	// defer conn.SetReadDeadline(time.Time{})
 
 	const headerLen = 4 // 4 bytes for the length prefix
 
@@ -248,18 +248,35 @@ func readError(err error) error {
 
 // messageRouter routes received message from peers to
 // respective message handlers
-func messageRouter(m *Message) {
+func messageRouter(m *Message, p *Peer, t *torrent.Torrent) {
+	var err error
+
 	switch m.ID {
 	case 0:
-		chokeMsgHandler()
+		err = chokeMsgHandler(p.Conn, p)
+		if err != nil {
+			log.Printf("error in choke msg handler: %v", err)
+		}
 	case 1:
-		unchokeMsgHandler()
+		err = unchokeMsgHandler(p, t.Downloader)
+		if err != nil {
+			log.Printf("error in unchoke msg handler: %v", err)
+		}
 	case 4:
-		haveMsgHandler(m.Payload)
+		err = haveMsgHandler(m.Payload, p, t)
+		if err != nil {
+			log.Printf("error in have msg handler: %v", err)
+		}
 	case 5:
-		bitfieldMsgHandler(m.Payload)
+		err = bitfieldMsgHandler(m.Payload, p, t)
+		if err != nil {
+			log.Printf("error in bitfield msg handler: %v", err)
+		}
 	case 7:
-		pieceMsgHandler(m.Payload)
+		err = pieceMsgHandler(m.Payload)
+		if err != nil {
+			log.Printf("error in piece msg handler: %v", err)
+		}
 	}
 }
 

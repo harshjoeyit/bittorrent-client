@@ -75,3 +75,61 @@ func TestBuildBitFieldMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRequestMessage(t *testing.T) {
+	var expectedMsgLen int = 17
+	var expectedMsgLenHeader uint32 = 13
+	var expectedMsgID messageID = Request
+
+	var testCases = map[string]struct {
+		pieceIdx    int
+		blockOffset int
+		reqLen      int
+	}{
+		"first block": {
+			pieceIdx:    0,
+			blockOffset: 0,
+			reqLen:      16 * 1024, // 16 KB
+		},
+		"random block": {
+			pieceIdx:    0,
+			blockOffset: 0,
+			reqLen:      12345,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			msg := BuildRequestMessage(test.pieceIdx, test.blockOffset, test.reqLen)
+
+			if len(msg) != expectedMsgLen {
+				t.Errorf("msg len mismatch, expected: %d, got: %d", expectedMsgLen, len(msg))
+			}
+
+			msgHeaderLen := binary.BigEndian.Uint32(msg[:4])
+			if msgHeaderLen != expectedMsgLenHeader {
+				t.Errorf("msg header len mismatch, expected: %d, got: %d", expectedMsgLenHeader, msgHeaderLen)
+			}
+
+			msgID := msg[4]
+			if msgID != byte(expectedMsgID) {
+				t.Errorf("msg ID mismatch, expected: %d, got: %d", expectedMsgID, msgID)
+			}
+
+			pieceIdx := binary.BigEndian.Uint32(msg[5:9])
+			if pieceIdx != uint32(test.pieceIdx) {
+				t.Errorf("piece index mismatch, expected: %d, got: %d", test.pieceIdx, pieceIdx)
+			}
+
+			blockOffset := binary.BigEndian.Uint32(msg[9:13])
+			if blockOffset != uint32(test.blockOffset) {
+				t.Errorf("block offset mismatch, expected: %d, got: %d", test.blockOffset, blockOffset)
+			}
+
+			reqLen := binary.BigEndian.Uint32(msg[13:17])
+			if reqLen != uint32(test.reqLen) {
+				t.Errorf("request length mismatch, expected: %d, got: %d", test.reqLen, reqLen)
+			}
+		})
+	}
+}

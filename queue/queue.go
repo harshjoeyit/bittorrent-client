@@ -8,12 +8,12 @@ package queue
 import "github.com/gammazero/deque"
 
 type Queue struct {
-	q deque.Deque[Block]
+	q deque.Deque[*Block]
 }
 
-func NewQueue() Queue {
-	return Queue{
-		q: deque.Deque[Block]{},
+func NewQueue() *Queue {
+	return &Queue{
+		q: deque.Deque[*Block]{},
 	}
 }
 
@@ -23,17 +23,17 @@ func (q *Queue) IsEmpty() bool {
 	return q.q.Len() == 0
 }
 
-// Returns front element
-func (q *Queue) Front() Block {
+// Returns front element without removing it
+func (q *Queue) Front() *Block {
 	return q.q.Front()
 }
 
 // Pushes to back of the queue
-func (q *Queue) PushBack(b Block) {
+func (q *Queue) Push(b *Block) {
 	q.q.PushBack(b)
 }
 
-// Remove element from back of the queue
-func (q *Queue) PopBack() Block {
-	return q.q.PopBack()
+// Remove element from the front of the queue
+func (q *Queue) Pop() *Block {
+	return q.q.PopFront()
 }

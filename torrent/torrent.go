@@ -49,7 +49,7 @@ func NewTorrent(decoded interface{}) (t *Torrent, err error) {
 		return nil, fmt.Errorf("error getting pieces length: %v", err)
 	}
 
-	t.Downloader, err = NewDowloader(t)
+	t.Downloader, err = NewDownloader(t)
 	if err != nil {
 		return nil, fmt.Errorf("error creating new downloader: %v", err)
 	}
@@ -329,7 +329,7 @@ func (t *Torrent) GetPieceLengthAtPosition(pieceIdx int) (int, error) {
 	return t.PieceLength, nil
 }
 
-const defaultBlockLength int = 16384 // 16KB
+const DefaultBlockLength int = 16384 // 16KB
 
 // GetBlocksCount returns the number of block into which the piece at pieceIdx
 // can be divided into
@@ -339,7 +339,7 @@ func (t *Torrent) GetBlocksCount(pieceIdx int) (int, error) {
 		return 0, fmt.Errorf("error getting piece length at postion: %w", err)
 	}
 
-	return int(math.Ceil(float64(pieceLength) / float64(defaultBlockLength))), nil
+	return int(math.Ceil(float64(pieceLength) / float64(DefaultBlockLength))), nil
 }
 
 // A piece is divided into blocks of equal length except the last block
@@ -361,11 +361,11 @@ func (t *Torrent) GetBlockLength(pieceIdx, blockIdx int) (int, error) {
 		return 0, fmt.Errorf("error getting piece length: %w", err)
 	}
 
-	lastBlockLength := pieceLength % defaultBlockLength
+	lastBlockLength := pieceLength % DefaultBlockLength
 
 	if blockIdx == lastBlockIdx {
 		return lastBlockLength, nil
 	}
 
-	return defaultBlockLength, nil
+	return DefaultBlockLength, nil
 }
