@@ -5,43 +5,54 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"math"
+	"os"
 
 	"github.com/jackpal/bencode-go"
 )
 
 type Torrent struct {
-	T           interface{} // decoded torrent
+	Name        string      // Name is directory name where the files are to be saved
+	Files       []*FileMeta // Meta info of files to be downloaded
+	Decoded     interface{} // Decoded torrent
 	InfoHash    [20]byte
-	FileLength  int64 // to avoid re-computation
-	PiecesCount int   // number of pieces (to avoid re-computation)
-	PieceLength int   // to avoid re-computation
+	FileLength  int64
+	PiecesCount int
+	PieceLength int
+	PieceHash   [][20]byte // sha-1 hash for all the pieces
 	Downloader  *Downloader
 }
 
 func NewTorrent(decoded interface{}) (t *Torrent, err error) {
 	t = &Torrent{
-		T: decoded,
+		Decoded: decoded,
 	}
 
 	// Check validity of torrent by per-calculating fields
 	// at the time of creation of NewTorrent. These fields will
 	// be needed in further steps
+	t.Name, err = getName(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("error getting name: %v", err)
+	}
 
 	t.InfoHash, err = getInfoHash(decoded)
 	if err != nil {
 		return nil, fmt.Errorf("error getting info hash: %v", err)
 	}
 
-	t.FileLength, err = getFileLength(decoded)
+	t.Files, err = getFiles(decoded)
 	if err != nil {
-		return nil, fmt.Errorf("error getting file length: %v", err)
+		return nil, fmt.Errorf("error getting files: %v", err)
 	}
 
-	t.PiecesCount, err = getPiecesCount(decoded)
+	t.FileLength = getFileLength(t.Files)
+
+	t.PiecesCount, t.PieceHash, err = getPiecesHashAndCount(decoded)
 	if err != nil {
-		return nil, fmt.Errorf("error getting pieces count: %v", err)
+		return nil, fmt.Errorf("error getting piece hashes and count: %v", err)
 	}
 	log.Println("total pieces:", t.PiecesCount)
 
@@ -49,7 +60,7 @@ func NewTorrent(decoded interface{}) (t *Torrent, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting pieces length: %v", err)
 	}
-	log.Println("piece length:", t.PieceLength)
+	log.Printf("piece length: %d bytes (%d KB)\n", t.PieceLength, t.PieceLength/1024)
 	blocksPerPiece, _ := t.GetBlocksCount(0)
 	log.Println("blocks per piece >=", blocksPerPiece)
 
@@ -61,11 +72,22 @@ func NewTorrent(decoded interface{}) (t *Torrent, err error) {
 	return t, nil
 }
 
+// FileMeta represent each file in a multi-file torrent
+// In case of a single file torrent, the FileMeta represents itself
+type FileMeta struct {
+	// Path is location on disk relative to parent torrent folder
+	// For e.g. ["folder1", "images", "pic.jpg"]
+	Path []string
+
+	// Length is file size in bytes
+	Length int64
+}
+
 // GetAnnounceUrl extracts and returns annouce url (tracker url)
 // from torrent
 func (t *Torrent) GetAnnounceUrl() (string, error) {
 	// type assert to map[string]interface{}
-	torrentMap, ok := t.T.(map[string]interface{})
+	torrentMap, ok := t.Decoded.(map[string]interface{})
 	if !ok {
 		return "", fmt.Errorf("decoded data is not a map")
 	}
@@ -83,6 +105,40 @@ func (t *Torrent) GetAnnounceUrl() (string, error) {
 	}
 
 	return announceUrl, nil
+}
+
+func getName(decoded interface{}) (string, error) {
+	// type assert to map[string]interface{}
+	torrentMap, ok := decoded.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("decoded data is not a map")
+	}
+
+	// check if info field exists
+	info, ok := torrentMap["info"]
+	if !ok {
+		return "", fmt.Errorf("'info' field does not exist")
+	}
+
+	// type assert
+	infoMap, ok := info.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("'info' field not a map")
+	}
+
+	name, ok := infoMap["name"]
+	if !ok {
+		return "", fmt.Errorf("'info.name' field does not exist")
+	}
+
+	nameStr, ok := name.(string)
+	if !ok {
+		return "", fmt.Errorf("'info.name' field not a string")
+	}
+
+	log.Println("Name:", nameStr)
+
+	return nameStr, nil
 }
 
 func getInfoHash(decoded interface{}) ([20]byte, error) {
@@ -124,25 +180,40 @@ func getInfoHash(decoded interface{}) ([20]byte, error) {
 }
 
 // GetFileLength returns file length (in bytes)
-func getFileLength(decoded interface{}) (int64, error) {
+func getFileLength(files []*FileMeta) int64 {
 	var fileLength int64
 
+	for _, file := range files {
+		fileLength += file.Length
+	}
+
+	log.Printf(
+		"total file length: %d bytes (%d KB), (%0.2f MB)\n",
+		fileLength,
+		fileLength/1024,
+		float64(fileLength)/1024/1024,
+	)
+
+	return fileLength
+}
+
+func getFiles(decoded interface{}) ([]*FileMeta, error) {
 	// type assert to map[string]interface{}
 	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
-		return fileLength, fmt.Errorf("decoded data is not a map")
+		return nil, fmt.Errorf("decoded data is not a map")
 	}
 
 	// check if info field exists
 	info, ok := torrentMap["info"]
 	if !ok {
-		return fileLength, fmt.Errorf("'info' field does not exist")
+		return nil, fmt.Errorf("'info' field does not exist")
 	}
 
 	// type assert
 	infoMap, ok := info.(map[string]interface{})
 	if !ok {
-		return fileLength, fmt.Errorf("'info' field not a map")
+		return nil, fmt.Errorf("'info' field not a map")
 	}
 
 	/*
@@ -157,17 +228,22 @@ func getFileLength(decoded interface{}) (int64, error) {
 		}
 	*/
 
+	// Single file torrent
 	// check if 'length' key in present in dict, if yes, it's a single file
-
 	length, ok := infoMap["length"]
 	if ok {
+		// file length (size)
 		fileLength, ok := length.(int64)
 		if !ok {
-			return fileLength, fmt.Errorf("info.length field is not int64")
+			return nil, fmt.Errorf("info.length field is not int64")
 		}
 
-		log.Printf("single file torrent, length: %d bytes", fileLength)
-		return fileLength, nil
+		file := &FileMeta{
+			Path:   nil,
+			Length: fileLength,
+		}
+
+		return []*FileMeta{file}, nil
 	}
 
 	// !ok - multiple files
@@ -196,84 +272,122 @@ func getFileLength(decoded interface{}) (int64, error) {
 		}
 	*/
 
-	files, ok := infoMap["files"]
+	// Multi-file torrent
+	f, ok := infoMap["files"]
 	if !ok {
-		return fileLength, fmt.Errorf("info.files field is not exist")
+		return nil, fmt.Errorf("info.files field is not exist")
 	}
 
-	// type asset - files should be a slice (list)
-	fileList, ok := files.([]interface{})
+	// type asset - fl should be a slice
+	fl, ok := f.([]interface{})
 	if !ok {
-		return fileLength, fmt.Errorf("info.files field is not a list")
+		return nil, fmt.Errorf("info.files field is not a list")
 	}
 
 	log.Printf("multi file torrent\n")
-	for i, file := range fileList {
-		// each file should be a map[string]{}
-		fileMap, ok := file.(map[string]interface{})
+
+	var files []*FileMeta
+
+	for i, f := range fl {
+		// Each file should be a map[string]{}
+		fileMap, ok := f.(map[string]interface{})
 		if !ok {
-			return fileLength, fmt.Errorf("info.files.file value is not of type map[string]interface{}")
+			return nil, fmt.Errorf("info.files[%d] value is not of type map[string]interface{}", i)
 		}
 
-		// check if length field exists
+		file := &FileMeta{}
+
+		// Check if length field exists
 		length, ok := fileMap["length"]
 		if ok {
-			l, ok := length.(int64)
+			fileLength, ok := length.(int64)
 			if !ok {
-				return fileLength, fmt.Errorf("info.files.file[%d].length field is not int64", i)
+				return nil, fmt.Errorf("info.files[%d].length field is not int64", i)
+			}
+			file.Length = fileLength
+		}
+
+		// Check if path field exists
+		path, ok := fileMap["path"]
+		if ok {
+			filepath, ok := path.([]interface{})
+			if !ok {
+				return nil, fmt.Errorf("inf.files[%d].path field is not a list", i)
 			}
 
-			// Add to the total length
-			log.Printf("file[%d], length: %d bytes\n", i, l)
-			fileLength += l
+			// type cast to string and append to file.Path
+			file.Path = make([]string, 0)
+			for j, fp := range filepath {
+				fpstr, ok := fp.(string)
+				if !ok {
+					return nil, fmt.Errorf("inf.files[%d].path[%d] field is not a string", i, j)
+				}
+				file.Path = append(file.Path, fpstr)
+			}
+
 		}
+
+		files = append(files, file)
 	}
 
-	log.Printf("total length of multi-file: %d bytes\n", fileLength)
+	// Print files
+	for i, file := range files {
+		log.Printf("file[%d], length: %d, path: %v\n", i, file.Length, file.Path)
+	}
 
-	return fileLength, nil
+	return files, nil
 }
 
 // GetPiecesCount returns number of pieces for the torrent
-func getPiecesCount(decoded interface{}) (int, error) {
+func getPiecesHashAndCount(decoded interface{}) (int, [][20]byte, error) {
 	var c int
+	var pieceHashes [][20]byte
 
 	// type assert to map[string]interface{}
 	torrentMap, ok := decoded.(map[string]interface{})
 	if !ok {
-		return c, fmt.Errorf("decoded data is not a map")
+		return c, pieceHashes, fmt.Errorf("decoded data is not a map")
 	}
 
 	// check if info field exists
 	info, ok := torrentMap["info"]
 	if !ok {
-		return c, fmt.Errorf("'info' field does not exist")
+		return c, pieceHashes, fmt.Errorf("'info' field does not exist")
 	}
 
 	// type assert
 	infoMap, ok := info.(map[string]interface{})
 	if !ok {
-		return c, fmt.Errorf("'info' field not a map")
+		return c, pieceHashes, fmt.Errorf("'info' field not a map")
 	}
 
 	pieces, ok := infoMap["pieces"]
 	if !ok {
-		return c, fmt.Errorf("'pieces' field does not exist in 'info'")
+		return c, pieceHashes, fmt.Errorf("'pieces' field does not exist in 'info'")
 	}
 
 	// type assert
 	piecesStr, ok := pieces.(string)
 	if !ok {
-		return c, fmt.Errorf("'pieces' field not a string")
+		return c, pieceHashes, fmt.Errorf("'pieces' field not a string")
 	}
 
 	// since pieces is concatination of 20 bytes sha1 hashes,
 	// it should be divisible by 20
 	if len(piecesStr)%20 != 0 {
-		return c, fmt.Errorf("length of pieces is not divisible by 20")
+		return c, pieceHashes, fmt.Errorf("length of pieces is not divisible by 20")
 	}
 
-	return len(piecesStr) / 20, nil
+	// Preallocate slice for piece hashes for efficiency
+	pieceHashes = make([][20]byte, 0, len(piecesStr)/20)
+
+	for i := 0; i < len(piecesStr); i = i + 20 {
+		var h [20]byte
+		copy(h[:], piecesStr[i:i+20])
+		pieceHashes = append(pieceHashes, h)
+	}
+
+	return len(piecesStr) / 20, pieceHashes, nil
 }
 
 func getPieceLength(decoded interface{}) (int, error) {
@@ -379,4 +493,48 @@ func (t *Torrent) GetBlockLength(pieceIdx, blockIdx int) (int, error) {
 	}
 
 	return DefaultBlockLength, nil
+}
+
+// SplitTorrentDataIntoFiles splits the downloaded torrent.data files
+// into respective files as defined in FileMeta
+func (t *Torrent) SplitTorrentDataIntoFiles() error {
+	if !t.Downloader.IsDownloadComplete() {
+		return fmt.Errorf("download incomplete")
+	}
+
+	src := t.Downloader.f
+	defer src.Close()
+
+	// Global offset tracks the position in the sparse file
+	globalOffset := int64(0)
+
+	for _, file := range t.Files {
+		filename := file.Path[len(file.Path)-1]
+
+		// Open the target file for writing
+		dst, err := os.Create(filename)
+		if err != nil {
+			return fmt.Errorf("error creating file %s: %v", filename, err)
+		}
+		defer dst.Close()
+
+		// Copy the file's data from the sparse file
+		_, err = src.Seek(globalOffset, io.SeekStart)
+		if err != nil {
+			return fmt.Errorf("error seeking in sparse file: %v", err)
+		}
+
+		// Limit the reader to the file's size
+		_, err = io.CopyN(dst, src, file.Length)
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("error copying data to file %s: %v", filename, err)
+		}
+
+		// Update the global offset
+		globalOffset += file.Length
+	}
+
+	// todo: Delete the sparse file
+
+	return nil
 }

@@ -59,7 +59,7 @@ func ReceiveMessages(ctx context.Context, p *Peer, t *torrent.Torrent) {
 			log.Printf("stopping read loop for connection to %s as ctx cancelled or timeout\n", p.Conn.RemoteAddr().String())
 			return
 		default:
-			fmt.Printf("waiting for message from peer: %s\n", p.Conn.RemoteAddr().String())
+			// fmt.Printf("waiting for message from peer: %s\n", p.Conn.RemoteAddr().String())
 
 			if isHandshake {
 				msg, err := ReadHandshakeMessage(ctx, p.Conn)

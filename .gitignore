@@ -29,3 +29,7 @@ todo.md
 *.torrent
 
 downloads/*
+
+*.DS_Store
+
+logs/*

@@ -54,7 +54,7 @@ func requestOnePiece(p *Peer, d *torrent.Downloader) error {
 
 		d.Requested(b)
 
-		log.Printf("requested piece [%d][%d] from: %s\n", b.PieceIdx, d.BlockIdx(b), p.Conn.RemoteAddr().String())
+		fmt.Printf("requested [piece][block] [%d][%d] from: %s\n", b.PieceIdx, d.BlockIdx(b), p.Conn.RemoteAddr().String())
 
 		// break since we are requesting for only one piece
 		// Following strategy to request pieces from peer with highest upload rate,
@@ -189,18 +189,18 @@ func pieceMsgHandler(payload []byte, p *Peer, t *torrent.Torrent) error {
 		return fmt.Errorf("block len mismatch, expected:%d, got:%d", blockLen, len(blockData))
 	}
 
+	fmt.Printf("PIECE message received for: [%d][%d], from peer:%s\n", b.PieceIdx, t.Downloader.BlockIdx(b), p.Conn.RemoteAddr().String())
+
 	// Mark as downloaded
-	t.Downloader.Downloaded(b)
+	t.Downloader.Downloaded(b, blockData)
 
-	fmt.Printf("PIECE received: [%d][%d], from peer:%s\n", b.PieceIdx, t.Downloader.BlockIdx(b), p.Conn.RemoteAddr().String())
-
-	if !t.Downloader.IsDownloadComplete() {
-		// Download incomplete
-		return requestOnePiece(p, t.Downloader)
+	if t.Downloader.IsDownloadComplete() {
+		// Close connection to the peer
+		return p.Conn.Close()
 	}
 
-	// Download complete
-	return p.Conn.Close()
+	// Download incomplete
+	return requestOnePiece(p, t.Downloader)
 }
 
 func parsePieceMsg(payload []byte) (*queue.Block, []byte) {

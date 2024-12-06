@@ -47,6 +47,9 @@ func main() {
 		log.Printf("Error creating New Torrent: %v", err)
 		return
 	}
+	t.Downloader.Start()
+
+	// return
 
 	// get peers
 	peers, err := tracker.GetPeers(t)
@@ -64,6 +67,11 @@ func main() {
 
 	// Peers which our client is successfully connected to
 	connectedPeers := Connect(peers)
+
+	if len(connectedPeers) == 0 {
+		log.Printf("stopping as 0 connected peers\n")
+		return
+	}
 
 	handshakeMsg, err := peer.BuildHandshakeMessage(t.InfoHash)
 	if err != nil {
@@ -98,7 +106,16 @@ func main() {
 	// Print stats
 	PrintStats(t.Downloader)
 
+	// Wait for all the connections to be closed
 	wg.Wait()
+
+	fmt.Println("All connections closed.")
+
+	if err := t.SplitTorrentDataIntoFiles(); err != nil {
+		log.Printf("error splitting torrent data into files: %v\n", err)
+	}
+
+	fmt.Println("--------- File Ready ---------")
 }
 
 func readFile(relFilepath string) ([]byte, error) {
@@ -182,21 +199,23 @@ func Download(t *torrent.Torrent, peer *peer.Peer) {
 }
 
 func PrintStats(d *torrent.Downloader) {
-	var wgForStats sync.WaitGroup
-	wgForStats.Add(1)
+	done := make(chan struct{})
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	go func() {
-		for range ticker.C { // Use `for range` to iterate over the ticker channel
-			if d.IsDownloadComplete() {
-				wgForStats.Done()
-				break // Exit the loop if the download is complete
-			}
+		for range ticker.C {
 			d.PrintProgress()
+
+			if d.IsDownloadComplete() {
+				// Exit the loop if download is complete
+				done <- struct{}{}
+				break
+			}
 		}
 	}()
 
-	wgForStats.Wait()
+	<-done
+	fmt.Println("--------- Download Complete ---------")
 }
